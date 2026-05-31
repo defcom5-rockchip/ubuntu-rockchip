@@ -33,5 +33,23 @@ export CROSS_COMPILE=aarch64-linux-gnu-
 export CC=aarch64-linux-gnu-gcc
 export LANG=C
 
+# Host is GCC 15 / Ubuntu 26.04; the 6.1 vendor tree predates GCC 14+ promoting
+# warnings (e.g. discarded-qualifiers) to hard errors.
+#
+# Kernel proper: 6.1 sets CONFIG_WERROR=y, so relax it via KCFLAGS (honoured by
+# the main Kbuild and the rockchip debian/rules).
+export KCFLAGS="-Wno-error"
+#
+# Host tools: resolve_btfids builds bundled libbpf + libsubcmd, whose Makefiles
+# do `override CFLAGS += -Werror` *after* EXTRA_CFLAGS, so HOSTCFLAGS/-Wno-error
+# can't win — the later -Werror always overrides it. Strip the hardcoded -Werror
+# token directly from the freshly-checked-out tools Makefiles (objtool + perf
+# too, to pre-empt the next GCC 15 site). cwd is the kernel root here; this is
+# idempotent across re-runs since `git checkout` above restores -Werror first.
+for mk in tools/lib/bpf/Makefile tools/lib/subcmd/Makefile \
+          tools/objtool/Makefile tools/lib/perf/Makefile; do
+    [ -f "$mk" ] && sed -i -E 's/(^|[[:space:]])-Werror([[:space:]]|$)/\1\2/g' "$mk"
+done
+
 # Compile the kernel into a deb package
 fakeroot debian/rules clean binary-headers binary-rockchip do_mainline_build=true

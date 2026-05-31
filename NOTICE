@@ -1,0 +1,14 @@
+This project is a fork of ubuntu-rockchip, originally created and maintained
+by Joshua Riek (https://github.com/Joshua-Riek/ubuntu-rockchip).
+
+The original project was archived by its maintainer. This fork continues
+applying security updates and is maintained on a best-effort basis for
+Orange Pi 5B hardware.
+
+All upstream contributors retain copyright on their respective contributions.
+The kernel, u-boot, and other components included in builds carry their own
+licenses as documented in their respective source trees.
+
+Original work:    Joshua Riek and ubuntu-rockchip contributors
+This fork:        defcom5-rockchip, 2026-present
+License:          GNU General Public License v3.0 (see LICENSE)
