@@ -37,7 +37,11 @@ function config_image_hook__orangepi-5b() {
         # Enable USB 2.0 port
         cp "${overlay}/usr/lib/systemd/system/enable-usb2.service" "${rootfs}/usr/lib/systemd/system/enable-usb2.service"
         chroot "${rootfs}" systemctl --no-reload enable enable-usb2
-
+        # Apply kernel CVE mitigations (v1.0.1)
+        # Blacklist modules for CVEs whose code is built but unused on this board.
+        # See the file header for per-CVE detail and reversal instructions.
+        mkdir -p "${rootfs}/etc/modprobe.d"
+        cp "${overlay}/etc/modprobe.d/99-defcom5-cve-mitigations.conf" "${rootfs}/etc/modprobe.d/99-defcom5-cve-mitigations.conf"
         # Install wiring orangepi package 
         chroot "${rootfs}" apt-get -y install wiringpi-opi libwiringpi2-opi libwiringpi-opi-dev
         echo "BOARD=orangepi5" > "${rootfs}/etc/orangepi-release"

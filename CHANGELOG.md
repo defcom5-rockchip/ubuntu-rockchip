@@ -11,8 +11,53 @@ Upstream changes from [Joshua-Riek/ubuntu-rockchip](https://github.com/Joshua-Ri
 ## [Unreleased]
 
 ### Planned
-- Evaluate and cherry-pick additional upstream kernel CVE fixes onto the `noble-security` branch as time permits. Candidates include CVE-2026-31431 (Copy Fail), CVE-2026-43284 / -43500 (Dirty Frag), and CVE-2026-43494 (PinTheft). See [README → Known limitations](./README.md#known-limitations) for current scope and rationale.
 - Rebuild `hcitools` from [Orange Pi's published source](https://github.com/orangepi-xunlong/orangepi-build/tree/next/external/cache/sources/hcitools) to replace the inherited binary blob in `/usr/bin/`.
+- Evaluate RK3588 4K@120Hz support (VOP2 dclk limits) from upstream PR #1326, pending hardware verification on Orange Pi 5B.
+
+---
+
+## [1.0.1] — 2026-06-01
+
+Security assessment and mitigation release. Addresses the notable Linux kernel
+local-privilege-escalation CVEs disclosed in spring 2026, by auditing which
+vulnerable code is actually present in this kernel's build configuration and
+mitigating the exploitable attack surface.
+
+### Security
+
+A full assessment of the spring-2026 kernel LPE CVEs against this image's kernel
+configuration (verified via `/proc/config.gz`):
+
+| CVE | Name | Subsystem | Kernel config | Status |
+|---|---|---|---|---|
+| CVE-2026-31431 | Copy Fail | algif_aead (AF_ALG) | `CONFIG_CRYPTO_USER_API_AEAD` not set | **Not affected** — code not built |
+| CVE-2026-43500 | Dirty Frag (rxrpc) | RxRPC / AFS | `CONFIG_AF_RXRPC` not set | **Not affected** — code not built |
+| CVE-2026-43284 | Dirty Frag (ESP) | IPsec ESP | `esp4`/`esp6` built as modules | **Mitigated** — modules blacklisted |
+| CVE-2026-43494 | PinTheft | RDS | `rds`/`rds_tcp` built as modules | **Mitigated** — modules blacklisted |
+| CVE-2026-46333 | ssh-keysign-pwn | ptrace | built-in | **Patched** in v1.0.0 (kernel) |
+
+### Added
+- `overlay/etc/modprobe.d/99-defcom5-cve-mitigations.conf` — blacklists the
+  `esp4`, `esp6`, `rds`, and `rds_tcp` modules to neutralize the exploitable
+  attack surface for CVE-2026-43284 (Dirty Frag, IPsec ESP) and CVE-2026-43494
+  (PinTheft, RDS). These modules are built in the Rockchip BSP kernel but are
+  not loaded by default and are not needed for normal Orange Pi 5B operation.
+  The file is self-documenting and includes reversal instructions for users who
+  need IPsec or RDS. **Note: WireGuard and Tailscale do not use IPsec ESP and
+  are unaffected by this blacklist.**
+- Copy instruction in the `orangepi-5b` board hook to deploy the mitigation file
+  into built images.
+
+### Notes
+- This release does **not** rebuild the kernel. Two of the relevant CVEs are not
+  exploitable because the vulnerable code is not compiled in; the other two are
+  neutralized by preventing the affected (unused) modules from loading. This is
+  a deliberate, lower-risk approach than cherry-picking patches onto the
+  divergent vendor BSP tree (which is at 6.1.75, ~99 stable point releases
+  behind upstream 6.1.y).
+- Practical exposure on a single-user homelab Orange Pi 5B was already low (all
+  of these are local-privilege-escalation CVEs requiring an existing
+  unprivileged shell). The mitigations harden the image for all users regardless.
 
 ---
 
@@ -40,23 +85,11 @@ Initial public release of the defcom5-rockchip fork. Continuation of Joshua-Riek
   - Disclosed: 2026-05-14 by Qualys Threat Research Unit
   - Mitigation alternative without the patch: set `kernel.yama.ptrace_scope=2` via sysctl.
 
-### Known security gaps in v1.0.0
-
-Important: this fork's kernel is **not** comprehensively CVE-patched. The upstream `linux-rockchip` package was never part of Canonical's noble kernel security pipeline (it ships through a PPA, not Ubuntu's main or security archives). With Joshua-Riek's project archived, no upstream pipeline is feeding kernel CVE backports into this tree.
-
-The only CVE explicitly backported in v1.0.0 is CVE-2026-46333 (above). Other notable 2026 kernel CVEs that are **not** explicitly backported in this release:
-
-- **CVE-2026-31431** ("Copy Fail") — algif_aead local privilege escalation, CVSS 7.8, reported as exploited in the wild
-- **CVE-2026-43284, CVE-2026-43500** ("Dirty Frag") — local privilege escalation pair
-- **CVE-2026-43494** ("PinTheft") — RDS zerocopy double-free, local privilege escalation. RDS is not loaded by default on Ubuntu so practical exposure is gated by whether the user explicitly loads the module.
-
-For the OPi 5B single-user homelab use case for which this fork is maintained, the practical exposure to these LPE-class CVEs is bounded by the fact that no untrusted users have shell access. But this is a *risk assessment*, not a "fully patched" claim. Users with multi-user systems or stricter security postures should evaluate accordingly.
-
 ### Inherited from upstream (unchanged)
 - All board overlays, device trees, firmware, and userspace overlays from Joshua-Riek's last public release.
 - `EXTRA_PPAS=jjriek/rockchip jjriek/rockchip-multimedia` for userspace packages. These PPAs are no longer maintained but the package versions there remain installable.
 - Panfork Mesa PPA (`ppa:jjriek/panfork-mesa`) for Mali G610 GPU support — also no longer actively maintained.
-- `hcitools` binary blob in `/usr/bin/` for Bluetooth firmware loading on RK3588 combo chips. See [Unreleased] for rebuild plans.
+- `hcitools` binary blob in `/usr/bin/` for Bluetooth firmware loading on RK3588 combo chips.
 
 ---
 
@@ -66,5 +99,6 @@ For the OPi 5B single-user homelab use case for which this fork is maintained, t
 - **Minor version** (`1.X.0`): kernel ABI bump, new board support, or notable feature additions.
 - **Patch version** (`1.0.X`): security backports, bug fixes, configuration tweaks.
 
-[Unreleased]: ../../compare/defcom5-v1.0.0...HEAD
+[Unreleased]: ../../compare/defcom5-v1.0.1...HEAD
+[1.0.1]: ../../releases/tag/defcom5-v1.0.1
 [1.0.0]: ../../releases/tag/defcom5-v1.0.0
