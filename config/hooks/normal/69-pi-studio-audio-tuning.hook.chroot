@@ -1,0 +1,62 @@
+#!/bin/sh
+#
+# 69-pi-studio-audio-tuning.hook.chroot
+#
+# Pi Studio v1.2 audio tuning (build-side). Runs in the arm64 chroot as root.
+#
+#  1. System-wide PipeWire quantum drop-in — makes the low-latency story true for
+#     EVERYTHING (Sonic Pi OSC one-liners, qsynth, browser audio), not just apps
+#     that explicitly request a small quantum. Without this the image idles at
+#     PipeWire's default quantum 1024 (~21 ms) until a DAW asks for less.
+#
+#  2. Seed interactively-created users into the `audio` group — direct-RT headroom.
+#     rtkit already grants RT (pw-data-loop threads run SCHED_RR; 0 xruns @ 1.33 ms
+#     verified on hardware), so this is HEADROOM, not a fix. Best-effort: oem-config
+#     may create the first user outside adduser, in which case rtkit still covers it.
+#
+# The USB-autosuspend-off half of the audio tuning is a BOOT ARG, so it lives on the
+# kernel cmdline (config/boards/orangepi-5b.sh), not in this rootfs hook.
+
+set -e
+
+# FLAVOR GATE: studio | desktop | nnp. Read the VALUE, not just the file's
+# existence — a third product (NNP) has no FLAVOR of its own under the old
+# boolean test and would have run every studio hook on a headless server.
+# No file at all = studio, which keeps existing vendor bundles working.
+PI_FLAVOR=studio; [ -r /tmp/pi-studio/FLAVOR ] && PI_FLAVOR=$(tr -d "[:space:]" < /tmp/pi-studio/FLAVOR) || true; [ -n "$PI_FLAVOR" ] || PI_FLAVOR=studio
+[ "$PI_FLAVOR" = studio ] || { echo "I: [flavor] $PI_FLAVOR build - skipping studio-only hook"; exit 0; }
+
+
+echo "I: [pi-studio-audio-tuning] PipeWire system quantum drop-in (256 default / 64 floor)"
+install -d /etc/pipewire/pipewire.conf.d
+cat > /etc/pipewire/pipewire.conf.d/10-pistudio-lowlatency.conf <<'EOF'
+# Pi Studio — system-wide low-latency defaults.
+# Makes low latency the default for every client, not just DAWs that ask for it.
+#   quantum      256 = ~5.3 ms  (conservative system default; no xrun risk for casual apps)
+#   min-quantum   64 = ~1.33 ms (floor — our hardware-validated number, 0 xruns under load)
+#   max-quantum 1024 = ~21 ms   (ceiling; lets weak clients relax)
+# Do NOT force-quantum lower system-wide — that punishes clients that can't keep up.
+context.properties = {
+    default.clock.rate          = 48000
+    default.clock.allowed-rates = [ 44100 48000 96000 ]
+    default.clock.quantum       = 256
+    default.clock.min-quantum   = 64
+    default.clock.max-quantum   = 1024
+}
+EOF
+
+echo "I: [pi-studio-audio-tuning] seed new users into 'audio' (RT headroom; best-effort)"
+if [ -f /etc/adduser.conf ]; then
+    # ensure adduser adds new users to EXTRA_GROUPS
+    sed -i 's/^#*[[:space:]]*ADD_EXTRA_GROUPS=.*/ADD_EXTRA_GROUPS=1/' /etc/adduser.conf
+    grep -q '^ADD_EXTRA_GROUPS=' /etc/adduser.conf || echo 'ADD_EXTRA_GROUPS=1' >> /etc/adduser.conf
+    # ensure 'audio' is in EXTRA_GROUPS, preserving any existing groups
+    if grep -qE '^[[:space:]]*EXTRA_GROUPS=' /etc/adduser.conf; then
+        grep -qE '^[[:space:]]*EXTRA_GROUPS=.*[" ]audio([" ]|$)' /etc/adduser.conf \
+            || sed -i -E 's/^[[:space:]]*#?[[:space:]]*EXTRA_GROUPS="?([^"]*)"?/EXTRA_GROUPS="\1 audio"/' /etc/adduser.conf
+    else
+        echo 'EXTRA_GROUPS="audio"' >> /etc/adduser.conf
+    fi
+fi
+
+echo "I: [pi-studio-audio-tuning] done"

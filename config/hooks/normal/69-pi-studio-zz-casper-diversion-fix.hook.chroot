@@ -1,0 +1,60 @@
+#!/bin/sh
+#
+# 69-pi-studio-zz-casper-diversion-fix.hook.chroot
+#
+# Fix the casper update-initramfs diversion AT BUILD TIME so no shipped image
+# hits the first-boot dpkg error (Pi Claude's HANDOFF-casper-initramfs-diversion,
+# 2026-07-14; observed on v1.1 .181 and the v1.2 EVO boot).
+#
+# THE BUG: casper.postinst diverts /usr/sbin/update-initramfs -> .REAL and drops
+# a stub, but when oem-config's first-boot cleanup purges the installer set
+# (casper/ubiquity/oem-config), the stub is deleted while the diversion is NOT
+# removed. Next initramfs trigger: "update-initramfs: not found" -> exit 127 ->
+# initramfs-tools stuck half-configured (iF) + stranded ic remnants -> the
+# "package removal error" the user sees on first boot.
+#
+# THE FIX (prevention, not repair): undo the diversion HERE, in the last chroot
+# hook, after all package installs. The stub is only an optimization (suppresses
+# initramfs rebuilds during live/OEM package ops); without it, first-boot cleanup
+# just runs the real update-initramfs once — slower by a minute, and correct.
+# casper stays installed (ubiquity depends on it); its purge on device is then
+# clean: its postrm's diversion handling is a no-op when the diversion is gone.
+#
+# 'zz' in the name: hooks are copied to 2<name>.chroot and run lexically —
+# this must run AFTER every other 26x/269 pi-studio hook's package operations.
+
+set -e
+
+UIR=/usr/sbin/update-initramfs
+
+if ! dpkg-divert --list "$UIR" | grep -q .; then
+    echo "I: [pi-studio-casper-fix] no update-initramfs diversion — nothing to do"
+else
+    # Build-time difference vs the on-device repair: the casper STUB still sits
+    # at $UIR, and dpkg-divert --rename refuses to overwrite it. Verify it IS
+    # the stub (the real tool is ~7 KB; the stub is ~170 bytes), then drop it.
+    STUB_SIZE=$(stat -c %s "$UIR" 2>/dev/null || echo 0)
+    REAL_SIZE=$(stat -c %s "$UIR.REAL" 2>/dev/null || echo 0)
+    if [ "$REAL_SIZE" -lt 1000 ]; then
+        echo "E: [pi-studio-casper-fix] $UIR.REAL missing/too small ($REAL_SIZE) — refusing to touch diversion" >&2
+        exit 1
+    fi
+    if [ "$STUB_SIZE" -ge 1000 ]; then
+        echo "E: [pi-studio-casper-fix] $UIR is $STUB_SIZE bytes — looks REAL, not casper's stub; refusing to delete" >&2
+        exit 1
+    fi
+    rm -f "$UIR"
+    dpkg-divert --rename --remove "$UIR"
+    echo "I: [pi-studio-casper-fix] diversion removed, real update-initramfs restored ($REAL_SIZE bytes)"
+fi
+
+# Belt-and-suspenders: nothing may be left half-configured at bake time.
+dpkg --configure -a
+
+# Punch-list verification (from the handoff) — FAIL THE BUILD if the fix didn't take.
+dpkg-divert --list | grep -q update-initramfs && { echo "E: [pi-studio-casper-fix] diversion still present" >&2; exit 1; }
+[ -x "$UIR" ] || { echo "E: [pi-studio-casper-fix] $UIR missing/not executable" >&2; exit 1; }
+[ "$(stat -c %s "$UIR")" -ge 1000 ] || { echo "E: [pi-studio-casper-fix] $UIR is still a stub" >&2; exit 1; }
+dpkg --audit | grep -q . && { echo "E: [pi-studio-casper-fix] dpkg --audit not clean" >&2; exit 1; }
+
+echo "I: [pi-studio-casper-fix] verified: real update-initramfs in place, no diversion, dpkg clean"

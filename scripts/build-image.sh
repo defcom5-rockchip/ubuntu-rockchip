@@ -75,7 +75,23 @@ umount "${disk}"* 2> /dev/null || true
 umount ${mount_point}/* 2> /dev/null || true
 mkdir -p ${mount_point}
 
-if [ -z "${img##*server*}" ]; then
+# PARTITION LAYOUT — note this keys off the IMAGE FILENAME containing "server".
+#
+# The two-partition cloud layout (4 MB vfat CIDATA on p1 + ext4 rootfs on p2) is
+# what Ubuntu's cloud images expect. It does NOT boot on this board: u-boot finds
+# a FAT partition with no /extlinux on p1 and gives up rather than walking on to
+# p2, so the card is ignored and the board falls back to whatever is on eMMC.
+# Every image this project has ever booted — Pi Studio, Pi Desktop — is the
+# single-ext4-partition layout with /boot/extlinux on p1.
+#
+# Diagnosed 2026-08-05 on the resolute NNP test card: bootloader present at
+# sectors 64/16384, kernel + initrd + DTB all correct on p2, and the board still
+# booted eMMC. An Armbian card (single partition) boots the same board fine.
+#
+# So: stock/mainline builds take the single-partition path regardless of what the
+# flavour is called. KERNEL_SOURCE is exported by the suite and reaches here via
+# config-image.sh. BSP server builds keep the old behaviour.
+if [ -z "${img##*server*}" ] && [ "${KERNEL_SOURCE:-forge}" != "stock" ]; then
     # Setup partition table
     dd if=/dev/zero of="${disk}" count=4096 bs=512
     parted --script "${disk}" \

@@ -1,0 +1,49 @@
+#!/bin/sh
+#
+# 61-pi-studio-audio.hook.chroot
+#
+# Pi Studio LEAN audio tier — PipeWire-first, snap-free. Desktop flavor only
+# (copied in when PROJECT=ubuntu, see build-rootfs.sh). Runs in the arm64 chroot.
+#
+# Guarded: aborts the build if the package set would pull a kernel or the
+# ubuntustudio-pipewire-config override (which would re-tune PipeWire and risk
+# the WiiM/BT routing). --no-install-recommends keeps jackd2/qjackctl OUT.
+#
+# NEVER install the `ubuntustudio` / `ubuntustudio-desktop` metapackage here —
+# it can drag in generic linux-lowlatency (no RK3588 BSP). Our rockchip kernel
+# is apt-held and is already the low-latency build.
+
+set -e
+
+# FLAVOR GATE: studio | desktop | nnp. Read the VALUE, not just the file's
+# existence — a third product (NNP) has no FLAVOR of its own under the old
+# boolean test and would have run every studio hook on a headless server.
+# No file at all = studio, which keeps existing vendor bundles working.
+PI_FLAVOR=studio; [ -r /tmp/pi-studio/FLAVOR ] && PI_FLAVOR=$(tr -d "[:space:]" < /tmp/pi-studio/FLAVOR) || true; [ -n "$PI_FLAVOR" ] || PI_FLAVOR=studio
+[ "$PI_FLAVOR" = studio ] || { echo "I: [flavor] $PI_FLAVOR build - skipping studio-only hook"; exit 0; }
+
+
+LEAN="ardour amsynth yoshimi fluidsynth qsynth \
+synthv1-lv2 padthv1-lv2 samplv1-lv2 drumkv1-lv2 hydrogen \
+lsp-plugins-lv2 calf-plugins x42-plugins dragonfly-reverb-lv2 zam-plugins dpf-plugins-lv2 mda-lv2 \
+qpwgraph vmpk ubuntustudio-performance-tweaks fluid-soundfont-gm"
+
+export DEBIAN_FRONTEND=noninteractive
+apt-get update
+
+echo "I: [pi-studio-audio] dry-run safety: no kernel / no ubuntustudio-pipewire-config"
+SIM="$(apt-get install -s --no-install-recommends $LEAN)"
+if echo "$SIM" | grep -qiE 'linux-image|linux-lowlatency'; then
+    echo "E: [pi-studio-audio] ABORT — package set would pull a kernel:" >&2
+    echo "$SIM" | grep -iE 'linux-image|linux-lowlatency' >&2
+    exit 1
+fi
+if echo "$SIM" | grep -qi 'ubuntustudio-pipewire-config'; then
+    echo "E: [pi-studio-audio] ABORT — would pull ubuntustudio-pipewire-config (PipeWire/WiiM risk)" >&2
+    exit 1
+fi
+
+echo "I: [pi-studio-audio] clean — installing the lean set (PipeWire-first)"
+apt-get install -y --no-install-recommends $LEAN
+
+echo "I: [pi-studio-audio] done — FluidR3 GM soundfont at /usr/share/sounds/sf2/FluidR3_GM.sf2"

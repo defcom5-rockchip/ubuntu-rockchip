@@ -202,11 +202,16 @@ if [ -z "${BOARD}" ] || [ -z "${SUITE}" ] || [ -z "${FLAVOR}" ]; then
     exit 1
 fi
 
-# Build the Linux kernel if not found
-if [[ ${LAUNCHPAD} != "Y" ]]; then
+# Build the Linux kernel if not found.
+# KERNEL_SOURCE=stock (config/suites/resolute.sh) means we use Ubuntu's packaged
+# kernel and build nothing here. Any suite that doesn't set it defaults to
+# "forge", so noble/jammy behaviour is unchanged.
+if [[ ${LAUNCHPAD} != "Y" && "${KERNEL_SOURCE:-forge}" != "stock" ]]; then
     if [[ ! -e "$(find build/linux-image-*.deb | sort | tail -n1)" || ! -e "$(find build/linux-headers-*.deb | sort | tail -n1)" ]]; then
         ./scripts/build-kernel.sh
     fi
+elif [[ "${KERNEL_SOURCE:-forge}" == "stock" ]]; then
+    echo "I: build: KERNEL_SOURCE=stock — using Ubuntu's packaged kernel, skipping kernel build"
 fi
 
 # Build U-Boot if not found

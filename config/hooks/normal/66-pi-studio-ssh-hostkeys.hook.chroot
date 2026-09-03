@@ -1,0 +1,49 @@
+#!/bin/sh
+#
+# 66-pi-studio-ssh-hostkeys.hook.chroot
+#
+# Strip build-host identity before the image ships publicly. Two things:
+#
+#  1. SSH host keys: openssh-server's postinst generates them INSIDE THE CHROOT,
+#     baking identical keys into every flashed image — a security hole (shared
+#     host keys = trivial MITM/impersonation) AND a privacy leak (the .pub
+#     comments carry the build host's name, e.g. root@<builduser>-MS-7966).
+#     Strip them + regenerate UNIQUE keys on each device's first boot.
+#  2. Build logs: /var/log/bootstrap.log records the build path
+#     (/home/<builduser>/...) and ships in the image — scrub it.
+set -e
+echo "I: [pi-studio-ssh] removing baked-in SSH host keys (regen per-device on first boot)"
+rm -f /etc/ssh/ssh_host_*
+
+echo "I: [pi-studio-ssh] scrubbing build-host paths from build logs"
+: > /var/log/bootstrap.log 2>/dev/null || true
+for l in /var/log/apt/term.log /var/log/apt/history.log /var/log/dpkg.log \
+         /var/log/alternatives.log /var/log/fontconfig.log; do
+  [ -f "$l" ] && : > "$l" 2>/dev/null || true
+done
+
+# First-boot oneshot: generate fresh host keys if none exist, before sshd starts.
+cat > /etc/systemd/system/regenerate-ssh-host-keys.service <<'EOF'
+[Unit]
+Description=Regenerate SSH host keys on first boot (Pi Studio)
+ConditionFileIsExecutable=/usr/bin/ssh-keygen
+ConditionPathExistsGlob=!/etc/ssh/ssh_host_*_key
+Before=ssh.service ssh.socket
+DefaultDependencies=no
+After=local-fs.target
+
+[Service]
+Type=oneshot
+ExecStart=/usr/bin/ssh-keygen -A
+RemainAfterExit=yes
+
+[Install]
+WantedBy=multi-user.target
+EOF
+
+# enable via wants-symlink (systemctl enable is unreliable in a chroot)
+mkdir -p /etc/systemd/system/multi-user.target.wants
+ln -sf /etc/systemd/system/regenerate-ssh-host-keys.service \
+  /etc/systemd/system/multi-user.target.wants/regenerate-ssh-host-keys.service
+
+echo "I: [pi-studio-ssh] done — host keys will regenerate uniquely on first boot"

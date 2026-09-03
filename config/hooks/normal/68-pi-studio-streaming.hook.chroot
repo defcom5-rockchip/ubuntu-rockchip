@@ -1,0 +1,86 @@
+#!/bin/sh
+#
+# 68-pi-studio-streaming.hook.chroot
+#
+# Pi Studio "Streaming" launcher — a Chromium profile tuned for DRM streaming
+# video on RK3588/arm64. Opens in its own --user-data-dir with a ChromeOS user-
+# agent (DRM services gate on the CrOS *platform* token, not the Chrome version;
+# proven on hardware 2026-06-30). Widevine = L3 -> 720p, software-decoded (~45%
+# of one A76 core, smooth); HW decode (/dev/mpp_service) does NOT engage for DRM
+# streams by design. Dedicated profile => always its own instance, never loses the
+# spoof to an unflagged primary. Desktop only, arm64 chroot. User-facing names are
+# generic ("Streaming") — no trademark shipped on the button or in the docs.
+set -e
+
+# FLAVOR GATE: GUI flavours only. An ALLOWLIST on purpose — a new flavour
+# defaults to NOT getting desktop payload, which fails safe. Under the old
+# ungated form this hook would have installed a browser/GUI stack onto the
+# headless NNP server image.
+PI_FLAVOR=studio; [ -r /tmp/pi-studio/FLAVOR ] && PI_FLAVOR=$(tr -d "[:space:]" < /tmp/pi-studio/FLAVOR) || true; [ -n "$PI_FLAVOR" ] || PI_FLAVOR=studio
+case "$PI_FLAVOR" in
+  studio|desktop) ;;
+  *) echo "I: [flavor] $PI_FLAVOR build - skipping GUI-only hook"; exit 0 ;;
+esac
+
+echo "I: [pi-studio-streaming] streaming launcher + dock button + how-to"
+
+# 1. the launcher -----------------------------------------------------------
+cat > /usr/local/bin/pi-streaming <<'EOF'
+#!/bin/bash
+# Pi Studio — Streaming (Chromium 132 rkmpp + ChromeOS profile; Widevine L3 / 720p).
+# DRM services gate on the CrOS platform token (NOT the Chrome version). Own
+# --user-data-dir => always a separate instance. Do NOT add --use-gl=angle /
+# --enable-features: the chromium.d wrapper already sets the correct V4L2 flags.
+exec chromium \
+  --user-agent="Mozilla/5.0 (X11; CrOS x86_64 14541.0.0) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/148.0.0.0 Safari/537.36" \
+  --user-data-dir="$HOME/.config/pi-streaming" \
+  --app="https://www.netflix.com/"
+EOF
+chmod 0755 /usr/local/bin/pi-streaming
+
+# 2. dock/grid entry (generic name + icon — no trademark shipped) ------------
+cat > /usr/share/applications/pi-studio-streaming.desktop <<'EOF'
+[Desktop Entry]
+Version=1.0
+Type=Application
+Name=Streaming
+GenericName=DRM Video
+Comment=DRM streaming video (720p) — Pi Studio
+Exec=/usr/local/bin/pi-streaming
+Icon=applications-multimedia
+Terminal=false
+Categories=AudioVideo;Video;Network;
+Keywords=streaming;video;movies;drm;widevine;
+StartupNotify=true
+EOF
+
+# 3. add to dock favorites (best-effort; else stays in the app grid) ---------
+BTN="'pi-studio-streaming.desktop'"
+EXIST=$(grep -rl 'favorite-apps' /usr/share/glib-2.0/schemas/*.override 2>/dev/null | head -1)
+if [ -n "$EXIST" ]; then
+  grep -q 'pi-studio-streaming.desktop' "$EXIST" || sed -i "s/\(favorite-apps=\[\)/\1${BTN}, /" "$EXIST"
+fi
+glib-compile-schemas /usr/share/glib-2.0/schemas/ 2>/dev/null || true
+update-desktop-database /usr/share/applications 2>/dev/null || true
+
+# 4. on-desktop how-to note (hook 67 writes the file first) ------------------
+HT=/etc/skel/Desktop/Pi-Studio-HowTo.txt
+if [ -f "$HT" ] && ! grep -q "STREAMING" "$HT" 2>/dev/null; then
+  cat >> "$HT" <<'EOF'
+
+──────────────────────────────────────────────────────────────────────
+ STREAMING  —  the "Streaming" button
+──────────────────────────────────────────────────────────────────────
+The "Streaming" button (dock or app grid) opens a browser profile tuned
+for DRM streaming video.
+
+  • Quality is 720p. DRM video on Linux uses Widevine L3, which caps at
+    720p everywhere — no setting raises it on this hardware.
+  • It's smooth and watchable; protected video uses software decode,
+    which is normal on Linux.
+  • For other DRM services (Prime Video, Disney+, Spotify), run the
+    Widevine installer (see the streaming docs) and use Chromium normally.
+EOF
+fi
+
+echo "I: [pi-studio-streaming] done"

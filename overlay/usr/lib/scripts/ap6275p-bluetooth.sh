@@ -1,4 +1,6 @@
 #!/bin/bash
+# SPDX-License-Identifier: GPL-3.0-or-later
+# Copyright (C) 2026 defcom5-rockchip — https://github.com/defcom5-rockchip
 # AP6275P Bluetooth bring-up — race-hardened (WiFi/BT combo-chip fix, defcom5-rockchip)
 # Fixes: (1) unblock BT only, not "all" (don't wake WiFi during BT firmware load);
 #        (2) verify hci0 got a real MAC + one boot-time retry if it wedged (null MAC / -49).

@@ -79,6 +79,52 @@ function config_image_hook__orangepi-5b() {
             echo "I: [pi-studio] appended usbcore.autosuspend=-1 to kernel cmdline"
         fi
 
+        # Pi Studio: bump CMA 256M -> 512M for 4K HW-decode headroom. RK3588
+        # MPP/VA-API decode buffers for 4K + dual-browser want more contiguous
+        # memory than the 256M default leaves after fragmentation; 512M is the
+        # safe floor on a 16GB board (Boardcon runs 256M for 2+ 1080p streams).
+        if [ -f "${rootfs}/etc/kernel/cmdline" ] && ! grep -q 'cma=' "${rootfs}/etc/kernel/cmdline"; then
+            sed -i 's/[[:space:]]*$/ cma=512M/' "${rootfs}/etc/kernel/cmdline"
+            echo "I: [pi-studio] appended cma=512M to kernel cmdline"
+        fi
+
+        echo "BOARD=orangepi5" > "${rootfs}/etc/orangepi-release"
+    fi
+
+    # ---- MAINLINE / STOCK-KERNEL SUITES (resolute, 26.04+) -------------------
+    # Everything above is deliberately skipped: panfork, libmali, the camera
+    # engine and the patchram/self-heal Bluetooth stack are all BSP-era vendor
+    # workarounds. Mainline uses Panthor + stock Mesa, and it binds the AP6275P
+    # Bluetooth natively via btbcm/serdev (proven on the Armbian edge spike) —
+    # so brcm_patchram_plus and ap6275p-bluetooth.service are NOT wanted here.
+    #
+    # The ONE thing Ubuntu doesn't give us is the radio firmware: the whole
+    # 43752/4362 family is absent from resolute's linux-firmware (verified
+    # against the archive). Without these four blobs neither radio comes up.
+    #
+    # ⚠️ NAMES MATTER. Our BSP overlay stores these under VENDOR names
+    # (fw_bcm43752a2_pcie_ag.bin etc). Mainline's brcmfmac asks for the UPSTREAM
+    # names — dmesg on the Armbian spike showed it request
+    # "brcm/brcmfmac43752-pcie". They are staged pre-renamed in the overlay.
+    if [ "${suite}" == "resolute" ]; then
+        echo "I: [orangepi-5b] mainline suite — installing AP6275P firmware at upstream names"
+        install -d "${rootfs}/usr/lib/firmware/brcm"
+        for f in brcmfmac43752-pcie.bin brcmfmac43752-pcie.clm_blob \
+                 brcmfmac43752-pcie.txt BCM4362A2.hcd; do
+            install -m644 "${overlay}/usr/lib/firmware/brcm/${f}" \
+                          "${rootfs}/usr/lib/firmware/brcm/${f}" \
+                || { echo "E: [orangepi-5b] missing firmware blob ${f}" >&2; return 1; }
+        done
+
+        # Gate: assert the files landed. Without them the board boots to a
+        # working console and NO radios, which reads as a kernel failure and
+        # sends the next person hunting in entirely the wrong place.
+        for f in brcmfmac43752-pcie.bin brcmfmac43752-pcie.clm_blob BCM4362A2.hcd; do
+            [ -s "${rootfs}/usr/lib/firmware/brcm/${f}" ] \
+                || { echo "E: [orangepi-5b] firmware ${f} absent after install" >&2; return 1; }
+        done
+        echo "I: [orangepi-5b] firmware staged (4 blobs) — no patchram, no self-heal service on mainline"
+
         echo "BOARD=orangepi5" > "${rootfs}/etc/orangepi-release"
     fi
 

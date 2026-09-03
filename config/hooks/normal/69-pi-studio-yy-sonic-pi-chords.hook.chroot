@@ -1,0 +1,60 @@
+#!/bin/sh
+#
+# 69-pi-studio-yy-sonic-pi-chords.hook.chroot
+#
+# Vendor upstream Sonic Pi bdb65c2 ("Chords and Scales", Sam Aaron 2026-07-13)
+# into the installed runtime: the Hendrix chord "7+9" (7#9 / Purple Haze),
+# "9-5"/"9+5"/"m9+5" fixes, :maj13, minor-major7 family, :maj7/:min7 aliases,
+# cross-octave wide-chord resolution, + scales lydian_dominant/altered/
+# phrygian_dominant/double_harmonic. Ruby-only — loads at boot, NO rebuild.
+#
+# Ships WHOLE FILES (not a patch): bdb65c2's chord.rb hunk does not apply onto
+# beta4+patch03 (shifted context). The vendored files are the verified 3-way
+# merge from fork branch chord-longform-extended-aliases @ 6e7bd5ee2 — see
+# /tmp/pi-studio/chords-scales/README.md for provenance + drift proof.
+#
+# ORDERING (the 2026-07-15 lesson): Sonic Pi lands TWICE in the bake — hook 263
+# extracts the legacy runtime tarball, then hook 265 (pi-studio-image customize)
+# apt-installs the sonic-pi_*-pistudio1 .deb, which OVERWRITES /opt/sonic-pi.
+# This hook was 64 and its work got silently stomped by 265's deb (built Jun 26,
+# pre-chords). 'yy' makes it run after ALL installs but before zz-casper-fix.
+# REAL fix eventually: Pi Claude rebuilds the sonic-pi .deb with patch 11 baked in.
+
+set -e
+
+# FLAVOR GATE: studio | desktop | nnp. Read the VALUE, not just the file's
+# existence — a third product (NNP) has no FLAVOR of its own under the old
+# boolean test and would have run every studio hook on a headless server.
+# No file at all = studio, which keeps existing vendor bundles working.
+PI_FLAVOR=studio; [ -r /tmp/pi-studio/FLAVOR ] && PI_FLAVOR=$(tr -d "[:space:]" < /tmp/pi-studio/FLAVOR) || true; [ -n "$PI_FLAVOR" ] || PI_FLAVOR=studio
+[ "$PI_FLAVOR" = studio ] || { echo "I: [flavor] $PI_FLAVOR build - skipping studio-only hook"; exit 0; }
+
+
+SRC=/tmp/pi-studio/chords-scales
+DST=/opt/sonic-pi/app/server/ruby/lib/sonicpi
+
+if [ ! -d /opt/sonic-pi ]; then
+    echo "WARN: [pi-studio-chords] no /opt/sonic-pi (server flavor or Sonic Pi skipped) — skipping"
+    exit 0
+fi
+[ -f "$SRC/chord.rb" ] && [ -f "$SRC/scale.rb" ] || { echo "E: [pi-studio-chords] vendored chords-scales files missing" >&2; exit 1; }
+[ -f "$DST/chord.rb" ] && [ -f "$DST/scale.rb" ] || { echo "E: [pi-studio-chords] installed tree has no $DST/{chord,scale}.rb" >&2; exit 1; }
+
+# Sanity-gate the vendored files BEFORE overwriting: must carry BOTH the new
+# bdb65c2 content (Hendrix 7+9, lydian_dominant) AND patch 03's long-form
+# aliases (:minor13) — guarantees we never regress patch 03 by shipping a
+# stale/upstream-only export.
+grep -q '"7+9"'            "$SRC/chord.rb" || { echo "E: [pi-studio-chords] vendored chord.rb lacks 7+9 (Hendrix)" >&2; exit 1; }
+grep -q ':minor13'         "$SRC/chord.rb" || { echo "E: [pi-studio-chords] vendored chord.rb lacks patch-03 :minor13" >&2; exit 1; }
+grep -q 'lydian_dominant'  "$SRC/scale.rb" || { echo "E: [pi-studio-chords] vendored scale.rb lacks lydian_dominant" >&2; exit 1; }
+
+# Match the installed files' ownership/mode (install(1) defaults root:root 644,
+# same as the extracted tree).
+install -m 644 "$SRC/chord.rb" "$DST/chord.rb"
+install -m 644 "$SRC/scale.rb" "$DST/scale.rb"
+
+# Post-verify in place.
+grep -q '"7+9"' "$DST/chord.rb" && grep -q 'phrygian_dominant' "$DST/scale.rb" \
+    || { echo "E: [pi-studio-chords] post-install verify FAILED" >&2; exit 1; }
+
+echo "I: [pi-studio-chords] Hendrix 7+9 + jazz chords + modal scales vendored into $DST"

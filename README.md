@@ -79,7 +79,7 @@ See the [CHANGELOG](./CHANGELOG.md) for the full assessment table.
 
 ## Other known limitations
 
-- **`hcitools` is currently a binary blob** inherited from upstream in `/usr/bin/`. Orange Pi has since [published the source](https://github.com/orangepi-xunlong/orangepi-build/tree/next/external/cache/sources/hcitools); rebuilding from source is on the roadmap.
+- **`brcm_patchram_plus` is an inherited binary blob** (shipped via the overlay to `/usr/bin/`) that loads the Bluetooth firmware (`BCM4362A2.hcd`) for the Orange Pi 5B's AP6275P combo chip, via `ap6275p-bluetooth.service`. Rebuilding it from source to drop the inherited binary is on the roadmap, but a first attempt with Orange Pi's *current* source revision failed hardware bring-up (see `packages/brcm-patchram-plus/VALIDATION-FAILED.md`) — the working blob came from an older revision that still needs to be identified. (Note: the only `hcitool` on the image is bluez's standard, package-owned tool — not a blob; there is no `hcitools`.)
 - **PPAs inherited from upstream are no longer maintained** (`ppa:jjriek/rockchip`, `ppa:jjriek/rockchip-multimedia`, `ppa:jjriek/panfork-mesa`). Package versions there are effectively frozen.
 - **No automated CI builds.** Releases are built manually.
 - **Only Ubuntu 24.04 (Noble) is supported.**

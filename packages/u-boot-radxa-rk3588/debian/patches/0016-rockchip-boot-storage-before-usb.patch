@@ -1,0 +1,50 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: defcom5-rockchip <defcom5rockchip@proton.me>
+Date: Thu, 30 Jul 2026 10:00:00 -0700
+Subject: [PATCH] rockchip: boot from storage before probing USB
+
+BOOT_TARGET_USB is first in BOOT_TARGET_DEVICES, so distro_bootcmd runs
+bootcmd_usb0 -> "usb start" on every boot, powering and enumerating the USB
+bus before it ever looks at mmc. On RK3588 boards that prevents booting when
+a bus-powered USB audio interface is attached (reproduced with an RME
+Babyface Pro, 600 mA @ 5 V): the device exceeds the 500 mA budget u-boot
+hands out at that stage, and/or u-boot's simple USB stack stalls enumerating
+a composite UAC2 audio+MIDI descriptor. A low-draw HID on the same port
+boots fine, which is consistent with both explanations.
+
+Move BOOT_TARGET_USB after the storage targets so the kernel is loaded from
+mmc/nvme/scsi before USB is touched at all. Linux brings the bus up later
+with proper per-port current management and handles such devices correctly.
+
+USB boot still works — it is simply tried after local storage, which only
+changes behaviour for a board that has both a bootable local disk and a
+bootable USB device attached, and prefers the latter.
+
+SD is kept ahead of eMMC so inserting a card still overrides the internal
+storage, which is the expected rescue path on these boards.
+
+Signed-off-by: defcom5-rockchip <defcom5rockchip@proton.me>
+---
+ include/configs/rockchip-common.h | 4 ++--
+ 1 file changed, 2 insertions(+), 2 deletions(-)
+
+diff --git a/include/configs/rockchip-common.h b/include/configs/rockchip-common.h
+index 1111111..2222222 100644
+--- a/include/configs/rockchip-common.h
++++ b/include/configs/rockchip-common.h
+@@ -119,11 +119,11 @@
+ #endif
+
+ #define BOOT_TARGET_DEVICES(func) \
+-	BOOT_TARGET_USB(func) \
+ 	BOOT_TARGET_SD(func) \
++	BOOT_TARGET_EMMC(func) \
+ 	BOOT_TARGET_NVME(func) \
+ 	BOOT_TARGET_SCSI(func) \
+-	BOOT_TARGET_EMMC(func) \
++	BOOT_TARGET_USB(func) \
+ 	BOOT_TARGET_MTD(func) \
+ 	BOOT_TARGET_RKNAND(func) \
+ 	BOOT_TARGET_PXE(func) \
+--
+2.43.0

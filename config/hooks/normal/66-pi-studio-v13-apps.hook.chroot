@@ -1,0 +1,69 @@
+#!/bin/sh
+#
+# 66-pi-studio-v13-apps.hook.chroot
+#
+# v1.3 application load + the pw-jack infra fix. Everything here was
+# acceptance-tested on the live test Pi 2026-07-18 (HANDOFF-v13-apps-RESULTS):
+#   - pipewire-jack + 00- ld.so.conf  <- FIXES v1.2's broken JACK-app compat
+#     (jackd2's libjack won the linker race; JACK-era apps crashed with
+#     JackTemporaryException. The 00- filename prefix IS the fix: it must
+#     sort before aarch64-linux-gnu.conf so PipeWire's libjack resolves first.)
+#   - Carla 2.5.10 OWN BUILD deb (Noble dropped carla; KXStudio is focal-only)
+#   - guitarix, dragonfly-reverb, sooperlooper, drumgizmo (noble repo)
+#   - pistudio-get-drumkit fetcher (kits are GB-sized; never baked)
+#   - first-boot slideshow (replaces stock ubiquity slides)
+# Assets arrive via the vendor dir -> /tmp/pi-studio (includes.chroot).
+
+set -e
+
+# FLAVOR GATE: studio | desktop | nnp. Read the VALUE, not just the file's
+# existence — a third product (NNP) has no FLAVOR of its own under the old
+# boolean test and would have run every studio hook on a headless server.
+# No file at all = studio, which keeps existing vendor bundles working.
+PI_FLAVOR=studio; [ -r /tmp/pi-studio/FLAVOR ] && PI_FLAVOR=$(tr -d "[:space:]" < /tmp/pi-studio/FLAVOR) || true; [ -n "$PI_FLAVOR" ] || PI_FLAVOR=studio
+[ "$PI_FLAVOR" = studio ] || { echo "I: [flavor] $PI_FLAVOR build - skipping studio-only hook"; exit 0; }
+
+
+V=/tmp/pi-studio
+
+echo "I: [pi-studio-v13] installing repo apps + pipewire-jack"
+apt-get install -y guitarix dragonfly-reverb sooperlooper drumgizmo pipewire-jack
+
+echo "I: [pi-studio-v13] installing Carla (own arm64 build)"
+[ -f "$V/carla_2.5.10-pistudio1_arm64.deb" ] || { echo "E: [pi-studio-v13] carla deb missing from vendor" >&2; exit 1; }
+apt-get install -y "$V/carla_2.5.10-pistudio1_arm64.deb"
+
+echo "I: [pi-studio-v13] pw-jack transparency (the v1.2 JACK fix)"
+[ -f "$V/00-pipewire-jack.conf" ] || { echo "E: [pi-studio-v13] 00-pipewire-jack.conf missing" >&2; exit 1; }
+install -m 0644 "$V/00-pipewire-jack.conf" /etc/ld.so.conf.d/00-pipewire-jack.conf
+ldconfig
+# THE gate: PipeWire's libjack must win the resolution order, or v1.2's bug ships again.
+FIRSTJACK=$(ldconfig -p | grep 'libjack\.so\.0 ' | head -1)
+echo "$FIRSTJACK" | grep -q pipewire || { echo "E: [pi-studio-v13] libjack ordering WRONG: $FIRSTJACK" >&2; exit 1; }
+echo "I: [pi-studio-v13] libjack resolves to pipewire first: OK"
+
+echo "I: [pi-studio-v13] drumkit fetcher"
+[ -f "$V/pistudio-get-drumkit" ] || { echo "E: [pi-studio-v13] pistudio-get-drumkit missing" >&2; exit 1; }
+install -m 0755 "$V/pistudio-get-drumkit" /usr/local/bin/pistudio-get-drumkit
+
+echo "I: [pi-studio-v13] first-boot slideshow"
+SLIDESHOW=/usr/share/ubiquity-slideshow
+if [ -d "$SLIDESHOW" ]; then
+    rm -rf /tmp/pistudio-slides
+    python3 -m zipfile -e "$V/pistudio-slideshow.zip" /tmp/pistudio-slides
+    [ -f /tmp/pistudio-slides/pistudio-slideshow/slides/01-welcome.html ] || { echo "E: [pi-studio-v13] slideshow zip layout unexpected" >&2; exit 1; }
+    # oem-config's viewer loads slides/index.html — the pack MUST carry the
+    # orchestrator (first-boot bug 2026-07-18: 6 standalone slides, no index ->
+    # "no such file or directory" in the setup pane). Gate on it.
+    [ -f /tmp/pistudio-slides/pistudio-slideshow/slides/index.html ] || { echo "E: [pi-studio-v13] slideshow zip missing index.html orchestrator" >&2; exit 1; }
+    rm -rf "$SLIDESHOW/slides"
+    cp -r /tmp/pistudio-slides/pistudio-slideshow/slides "$SLIDESHOW/slides"
+    # strip stock translations so our slides show for all locales (localized sets come later)
+    rm -rf "$SLIDESHOW/l10n" 2>/dev/null || true
+    rm -rf /tmp/pistudio-slides
+    echo "I: [pi-studio-v13] slideshow installed (6 slides)"
+else
+    echo "W: [pi-studio-v13] ubiquity-slideshow not present — slideshow skipped" >&2
+fi
+
+echo "I: [pi-studio-v13] done — carla/guitarix/dragonfly/sooperlooper/drumgizmo + pw-jack fix + slideshow"

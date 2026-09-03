@@ -1,0 +1,45 @@
+#!/bin/sh
+#
+# 58-snap-free.hook.chroot
+#
+# ALL FLAVORS — no gate. "No snaps" is a promise the whole product line makes,
+# on the README of every flavor. It is not a browser concern.
+#
+# WHY THIS EXISTS AS ITS OWN HOOK (2026-08-03):
+# This block used to live inside 62-pi-studio-browser as "## 1. SNAP-FREE".
+# That was fine while there were exactly two flavors, both of which ran that
+# hook. When 62 was gated to GUI flavors only (so the headless NNP build would
+# stop installing Chromium/Vivaldi/Betterbird), the snap purge went with it —
+# and NNP would have silently shipped WITH snapd, contradicting its own README.
+#
+# The lesson, which is the same one that cost three bakes this week: a fix
+# buried inside an unrelated hook inherits that hook's gate. Cross-cutting
+# promises get their own file.
+
+set -e
+export DEBIAN_FRONTEND=noninteractive
+
+echo "I: [snap-free] purging snapd (firefox/thunderbird snap-stubs go too)"
+apt-get purge -y snapd 2>/dev/null || true
+apt-mark hold snapd || true
+rm -rf /snap /var/snap /var/lib/snapd
+
+mkdir -p /etc/apt/preferences.d
+printf 'Package: snapd\nPin: release a=*\nPin-Priority: -10\n' > /etc/apt/preferences.d/nosnap.pref
+
+for u in snapd.service snapd.socket snapd.seeded.service; do
+    ln -sf /dev/null "/etc/systemd/system/$u"
+done
+
+# --- verify the END STATE, not the config meant to produce it ---------------
+# NB: `apt-mark hold snapd` (above) leaves a dpkg selection stanza for the purged
+# package, so `dpkg -s snapd` SUCCEEDS even though it's not installed. Test the
+# actual install STATE, not merely whether dpkg has a record.
+[ "$(dpkg-query -W -f='${db:Status-Status}' snapd 2>/dev/null || true)" = installed ] \
+    && { echo "E: [snap-free] snapd is still installed" >&2; exit 1; }
+[ -s /etc/apt/preferences.d/nosnap.pref ] || { echo "E: [snap-free] nosnap pin missing" >&2; exit 1; }
+grep -q 'Pin-Priority: -10' /etc/apt/preferences.d/nosnap.pref \
+    || { echo "E: [snap-free] nosnap pin malformed" >&2; exit 1; }
+[ ! -d /snap ] || { echo "E: [snap-free] /snap still present" >&2; exit 1; }
+
+echo "I: [snap-free] verified: snapd purged, pinned out, units masked"

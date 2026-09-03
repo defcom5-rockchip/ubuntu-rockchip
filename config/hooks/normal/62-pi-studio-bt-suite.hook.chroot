@@ -1,0 +1,27 @@
+#!/bin/sh
+#
+# 62-pi-studio-bt-suite.hook.chroot — SHARED (runs in BOTH flavors, no gate)
+#
+# The AP6275P Bluetooth self-heal suite (Pi Claude, validated on the Vanilla Sky
+# alpha through 3 rounds of live GNOME-toggle testing, verdict "I love it"):
+#   bt-revive          one-shot chip revive (BT_REG_ON power-cycle + patchram)
+#   bt-sentinel v3.6   watches for user toggle-off->on wedges, self-heals ~10-15s
+#                      with a desktop toast. Retires BT-1's "reboot to recover."
+#   bt-sentinel.service — MUST carry KillMode=process (systemd otherwise kills
+#                      the resident patchram child on service restart).
+# Assets arrive via /tmp/pi-studio (vendored per-flavor; staged in BOTH).
+
+set -e
+V=/tmp/pi-studio
+
+for f in bt-revive bt-sentinel bt-sentinel.service; do
+    [ -f "$V/$f" ] || { echo "E: [pi-studio-bt-suite] $f missing from vendor" >&2; exit 1; }
+done
+grep -q 'KillMode=process' "$V/bt-sentinel.service" || { echo "E: [pi-studio-bt-suite] service lacks KillMode=process (required)" >&2; exit 1; }
+
+install -m 0755 "$V/bt-revive"    /usr/local/sbin/bt-revive
+install -m 0755 "$V/bt-sentinel"  /usr/local/sbin/bt-sentinel
+install -m 0644 "$V/bt-sentinel.service" /etc/systemd/system/bt-sentinel.service
+systemctl enable bt-sentinel.service
+
+echo "I: [pi-studio-bt-suite] bt-revive + bt-sentinel v3.6 installed + enabled (both-flavor crown jewels)"

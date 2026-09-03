@@ -1,0 +1,35 @@
+#!/bin/sh
+#
+# 65-pi-studio-desktop.hook.chroot
+#
+# Pi Studio desktop identity + system de-bloat — runs Pi Claude's vendored image
+# scripts in the chroot (wallpaper default+option, Ubuntu-Pro/phone-home/GUI-updater
+# removal, "Software Update" dock button, Yaru-dark + ARMED-orange desktop theme as
+# dconf defaults). Desktop only, arm64 chroot. Scripts vendored to
+# /tmp/pi-studio/pi-studio-image/ (via includes.chroot from $PISTUDIO_VENDOR).
+# The scripts are bash + designed for "--yes" non-interactive chroot use.
+
+set -e
+
+# FLAVOR GATE: studio | desktop | nnp. Read the VALUE, not just the file's
+# existence — a third product (NNP) has no FLAVOR of its own under the old
+# boolean test and would have run every studio hook on a headless server.
+# No file at all = studio, which keeps existing vendor bundles working.
+PI_FLAVOR=studio; [ -r /tmp/pi-studio/FLAVOR ] && PI_FLAVOR=$(tr -d "[:space:]" < /tmp/pi-studio/FLAVOR) || true; [ -n "$PI_FLAVOR" ] || PI_FLAVOR=studio
+[ "$PI_FLAVOR" = studio ] || { echo "I: [flavor] $PI_FLAVOR build - skipping studio-only hook"; exit 0; }
+
+D=/tmp/pi-studio/pi-studio-image
+if [ ! -d "$D" ]; then
+    echo "WARN: [pi-studio-desktop] no $D vendored — skipping desktop polish"
+    exit 0
+fi
+export DEBIAN_FRONTEND=noninteractive
+chmod 1777 /tmp 2>/dev/null || true   # keep apt-key happy (vendoring can clobber /tmp)
+
+echo "I: [pi-studio-desktop] image customize (wallpaper + de-bloat + dock button)"
+( cd "$D" && bash ./pi-studio-image-customize.sh --yes ) || echo "WARN: [pi-studio-desktop] customize reported errors (continuing)"
+
+echo "I: [pi-studio-desktop] desktop theme (Yaru-dark + ARMED-orange dconf defaults)"
+( cd "$D" && bash ./pi-studio-desktop-theme.sh ) || echo "WARN: [pi-studio-desktop] theme reported errors (continuing)"
+
+echo "I: [pi-studio-desktop] done"

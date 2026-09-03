@@ -1,0 +1,56 @@
+#!/bin/sh
+#
+# 64-pi-studio-greeting.hook.chroot
+#
+# Pi Studio login greeting (ARMED-orange banner + live cava EQ + optional jingle)
+# and bundled demos. Desktop only, arm64 chroot. Assets vendored to /tmp/pi-studio.
+# Greeting fires once per boot on the first interactive login (not every terminal).
+
+set -e
+
+# FLAVOR GATE: studio | desktop | nnp. Read the VALUE, not just the file's
+# existence — a third product (NNP) has no FLAVOR of its own under the old
+# boolean test and would have run every studio hook on a headless server.
+# No file at all = studio, which keeps existing vendor bundles working.
+PI_FLAVOR=studio; [ -r /tmp/pi-studio/FLAVOR ] && PI_FLAVOR=$(tr -d "[:space:]" < /tmp/pi-studio/FLAVOR) || true; [ -n "$PI_FLAVOR" ] || PI_FLAVOR=studio
+[ "$PI_FLAVOR" = studio ] || { echo "I: [flavor] $PI_FLAVOR build - skipping studio-only hook"; exit 0; }
+
+export DEBIAN_FRONTEND=noninteractive
+VEND=/tmp/pi-studio
+G="$VEND/greeting"
+
+## Greeting --------------------------------------------------------------------
+if [ -d "$G" ]; then
+    echo "I: [pi-studio-greeting] cava + greeting files"
+    apt-get update
+    apt-get install -y cava || echo "WARN: [pi-studio-greeting] cava failed — EQ disabled, jingle still plays"
+    install -Dm644 "$G/banner.txt"        /etc/pi-studio/banner.txt
+    install -Dm644 "$G/cava.conf"         /etc/pi-studio/cava.conf
+    install -Dm755 "$G/pi-studio-greet.sh" /usr/bin/pi-studio-greet
+    # jingle is rendered in Sonic Pi — optional; greeting degrades without it
+    [ -f "$VEND/pi-studio-jingle.wav" ] && \
+        install -Dm644 "$VEND/pi-studio-jingle.wav" /usr/share/pi-studio/pi-studio-jingle.wav || \
+        echo "WARN: [pi-studio-greeting] no jingle vendored (banner+EQ only)"
+
+    # Fire once per boot, first interactive login only (flag in tmpfs /run clears on reboot)
+    install -d /etc/skel
+    cat >> /etc/skel/.bash_profile <<'EOF'
+
+# Pi Studio greeting — once per boot, first interactive login
+if [ -t 1 ] && command -v pi-studio-greet >/dev/null 2>&1; then
+    _psg="/run/user/$(id -u)/.pi-studio-greeted"
+    if [ ! -e "$_psg" ]; then touch "$_psg" 2>/dev/null; pi-studio-greet; fi
+    unset _psg
+fi
+EOF
+else
+    echo "WARN: [pi-studio-greeting] no $G — skipping greeting"
+fi
+
+## Demos -----------------------------------------------------------------------
+echo "I: [pi-studio-greeting] bundling demos -> /etc/skel/Pi-Studio-Demos"
+install -d /etc/skel/Pi-Studio-Demos
+[ -f "$VEND/dreaming.rb" ]  && install -m644 "$VEND/dreaming.rb"  /etc/skel/Pi-Studio-Demos/dreaming.rb
+[ -f "$VEND/bluehop.flac" ] && install -m644 "$VEND/bluehop.flac" /etc/skel/Pi-Studio-Demos/bluehop.flac
+
+echo "I: [pi-studio-greeting] done"

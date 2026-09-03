@@ -1,0 +1,178 @@
+#!/bin/sh
+#
+# 62-pi-studio-browser.hook.chroot
+#
+# Pi Studio snap-free browser/mail stack (desktop only; arm64 chroot):
+#   default = Chromium 132 (HW-accel, liujianfeng PPA, NON-snap)
+#   secondary = Vivaldi (current engine, for banking/sensitive)
+#   mail = Betterbird (vendored aarch64 tarball)
+#
+# VENDORED FILES the build should drop in /tmp/pi-studio/ before this runs
+# (optional — each is skipped-with-WARN if absent, never fails the build):
+#   betterbird-aarch64.tar.bz2   (pinned 140.11.0esr-bb23)
+#   chromium.png                 (256x256 Chromium logo, in case the pkg ships none)
+
+set -e
+
+# FLAVOR GATE: GUI flavours only. An ALLOWLIST on purpose — a new flavour
+# defaults to NOT getting desktop payload, which fails safe. Under the old
+# ungated form this hook would have installed a browser/GUI stack onto the
+# headless NNP server image.
+PI_FLAVOR=studio; [ -r /tmp/pi-studio/FLAVOR ] && PI_FLAVOR=$(tr -d "[:space:]" < /tmp/pi-studio/FLAVOR) || true; [ -n "$PI_FLAVOR" ] || PI_FLAVOR=studio
+case "$PI_FLAVOR" in
+  studio|desktop) ;;
+  *) echo "I: [flavor] $PI_FLAVOR build - skipping GUI-only hook"; exit 0 ;;
+esac
+export DEBIAN_FRONTEND=noninteractive
+VEND=/tmp/pi-studio
+
+# Restore /tmp to 1777 — the includes.chroot vendoring can leave it 0755, which
+# breaks apt-key (_apt can't write /tmp) -> apt update fails for EVERY repo.
+chmod 1777 /tmp 2>/dev/null || true
+
+## 1. SNAP-FREE — moved out (2026-08-03) ------------------------------------
+# Now lives in 58-snap-free.hook.chroot, UNGATED, because "no snaps" is a
+# promise every flavor makes and this hook is GUI-only. Leaving it here meant
+# the headless NNP build would have shipped with snapd. Do not re-add it here.
+mkdir -p /etc/apt/preferences.d
+
+## 1b. MESA: keep stock gallium OUT of the panfork stack --------------------
+# Browser HW video decode depends on this. The GL driver actually loaded on
+# this board is panfork's rockchip_dri.so (chrome://gpu reports "Mesa
+# 23.0.0-devel"), but Mesa 25.x split the gallium drivers into a NEW binary
+# package, mesa-libgallium, which panfork does not publish. Because panfork
+# has no candidate for that name, apt pinning cannot shadow it and the
+# `apt-get upgrade` steps in config-image.sh pull stock 25.2.8 in
+# unconditionally -> stock gallium layered under panfork's DRI module.
+# That chimera is what breaks Chromium 132 hardware decode.
+#
+# Removing mesa-libgallium on a live board restored HW decode on the safe
+# Panfrost/ANGLE path (3/3 cold boots, mpp_service held, rkvdec clocked,
+# ~85-155% CPU vs 600%+ software). This pin reproduces that state at bake time.
+#
+# WHY BLOCKING ONE PACKAGE RESTORES THE WHOLE STACK (the epoch mechanism):
+# panfork ships as 1:23.0.5-...  — epoch 1. Stock Ubuntu Mesa is 25.2.8 with NO
+# epoch, so panfork *outranks* it automatically and should always win. It loses
+# only because stock libgl1-mesa-dri carries a tight `mesa-libgallium (= 25.2.8)`
+# dependency: once that package is in play it drags the matching stock stack in
+# and defeats panfork's epoch. Remove the wedge and panfork wins on its own.
+#
+# Verified on hardware (.158, 2026-07-31): with mesa-libgallium absent, the
+# board sits on a FULL panfork stack — libegl-mesa0 / libgl1-mesa-dri /
+# libglapi-mesa / libglx-mesa0 / mesa-va-drivers / mesa-vdpau-drivers /
+# mesa-vulkan-drivers all 1:23.0.5-...panfork...noble6 — and Chromium 132
+# hardware-decodes 4K60 VP9 on the safe Panfrost/ANGLE path, 3/3 cold boots.
+echo "I: [pi-studio-browser] mesa: block stock mesa-libgallium (breaks Chromium HW decode)"
+# NOTE the `a=*`. `Pin: release *` is MALFORMED — apt silently ignores the whole
+# stanza, so the pin appears to be in place and does nothing. That exact typo let
+# mesa-libgallium back into the 2026-07-31 bake (caught by the gate below, which
+# is why the gate checks installed versions and not just this file's existence).
+# Match the nosnap.pref stanza above; it is the known-good form.
+printf 'Package: mesa-libgallium\nPin: release a=*\nPin-Priority: -1\n' \
+    > /etc/apt/preferences.d/10-no-mesa-libgallium.pref
+# Belt-and-braces: pin the panfork PPA itself above stock. >1000 is required —
+# it's the only priority that permits a DOWNGRADE, which is what reverting a
+# stock 25.2.8 package back to panfork 23.0.5 is. If the origin string is ever
+# wrong this silently matches nothing, which is why the bake gate in
+# config-image.sh verifies the INSTALLED versions rather than trusting this.
+printf 'Package: *\nPin: release o=LP-PPA-jjriek-panfork-mesa\nPin-Priority: 1001\n' \
+    >> /etc/apt/preferences.d/10-no-mesa-libgallium.pref
+# NOTE: no purge here. At this point in the build the panfork PPA has NOT been
+# added yet (the board hook in config-image.sh does that), so apt has no version
+# to fall back to and `apt purge mesa-libgallium` dies on unmet Qt/GLES deps —
+# which is exactly what happened in the 2026-08-01 bake. The pin above is all
+# this hook can usefully do; the actual stack swap happens in config-image.sh
+# once panfork is a real repo, as a single atomic transaction.
+
+## 2. CHROMIUM 132 (default) -----------------------------------------------
+echo "I: [pi-studio-browser] preserve old Chromium icon for the new 'chromium' package"
+for sz in 16 22 24 32 48 64 128 256; do
+  s="/usr/share/icons/hicolor/${sz}x${sz}/apps/chromium-browser.png"
+  [ -f "$s" ] && cp -f "$s" "/usr/share/icons/hicolor/${sz}x${sz}/apps/chromium.png"
+done
+[ -f "$VEND/chromium.png" ] && cp -f "$VEND/chromium.png" /usr/share/icons/hicolor/256x256/apps/chromium.png
+
+echo "I: [pi-studio-browser] remove jjriek chromium-browser(114), install liujianfeng chromium(132)"
+apt-get purge -y chromium-browser chromium-browser-l10n chromium-codecs-ffmpeg-extra 2>/dev/null || true
+# liujianfeng PPA via signed-by keyring (NOT add-apt-repository — it shells out
+# to the deprecated apt-key, which can't write /tmp in this chroot). Key vendored.
+install -d /etc/apt/keyrings
+if [ -f "$VEND/liujianfeng-rockchip-multimedia.gpg" ]; then
+  install -m644 "$VEND/liujianfeng-rockchip-multimedia.gpg" /etc/apt/keyrings/liujianfeng-rockchip-multimedia.gpg
+  echo "deb [signed-by=/etc/apt/keyrings/liujianfeng-rockchip-multimedia.gpg] https://ppa.launchpadcontent.net/liujianfeng1994/rockchip-multimedia/ubuntu noble main" > /etc/apt/sources.list.d/liujianfeng-rockchip-multimedia.list
+  apt-get update || echo "WARN: [pi-studio-browser] apt update reported errors (continuing)"
+  apt-get install -y --no-install-recommends chromium || echo "WARN: [pi-studio-browser] chromium 132 install failed (continuing)"
+  # ── HARDWARE VIDEO DECODE (added 2026-07-30) ────────────────────────────────
+  # Chromium alone is NOT enough. The rkmpp Chromium ships the decode *flags*, but
+  # the machinery lives in a package it neither Depends nor Recommends:
+  # `libv4l-rkmpp` — "a rockchip-mpp V4L2 wrapper plugin for chromium video dec and
+  # enc". Without it Chromium silently SOFTWARE-decodes: /dev/mpp_service stays idle
+  # while one core pegs at ~100% on a 4K YouTube stream (measured on hardware —
+  # TEST-RESULTS-emmc-4k-crash-repro.md). Every image up to and including v1.4
+  # shipped this way.
+  # NOTE for future archaeology: this stack is V4L2-over-MPP. There is NO VA-API —
+  # the PPA publishes no libva or VA driver at all — so `vainfo` finding nothing is
+  # expected and is NOT the bug. Don't go down that road.
+  apt-get install -y libv4l-rkmpp rockchip-multimedia-config \
+    || echo "WARN: [pi-studio-browser] rkmpp decode plugin install failed (continuing)"
+  if dpkg -s libv4l-rkmpp >/dev/null 2>&1; then
+    echo "I: [pi-studio-browser] rkmpp V4L2 decode plugin in: $(dpkg -L libv4l-rkmpp | grep -m1 '\.so' || echo 'installed')"
+  else
+    echo "W: [pi-studio-browser] libv4l-rkmpp NOT installed — Chromium will software-decode video" >&2
+  fi
+else
+  echo "WARN: [pi-studio-browser] no vendored liujianfeng key at $VEND — skipping chromium 132"
+fi
+# if the package still left no icon, fall back to the vendored one
+[ -f /usr/share/icons/hicolor/256x256/apps/chromium.png ] || \
+  { [ -f "$VEND/chromium.png" ] && cp "$VEND/chromium.png" /usr/share/icons/hicolor/256x256/apps/chromium.png; } || \
+  echo "WARN: [pi-studio-browser] no chromium icon — vendor $VEND/chromium.png"
+gtk-update-icon-cache -f /usr/share/icons/hicolor 2>/dev/null || true
+
+## 3. (Vivaldi DROPPED in 2.0.0 — its role was Widevine/DRM, which we cannot
+## legally redistribute; Chrome self-bundles Google's own arm64 Widevine and
+## takes the DRM role instead. See hook 63.)
+
+# NOTE: do NOT ship --disable-gpu-compositing on Chromium. It kills
+# hardware video decode (the GPU compositor is required to display HW-decoded
+# frames) → 4K@60 YouTube dropped ~55% of frames. The 4K@120 *windowed* flicker
+# it would fix only occurs in an off-label config (daily desktop = 4K@60 has no
+# flicker; 4K@120 is for fullscreen video, which direct-scans-out cleanly). HW
+# video decode wins. The manual flicker workaround is documented for end-users
+# in the "Pi Studio — How-To" desktop note instead. See assets/Pi-Studio-HowTo.txt.
+
+## 4. BETTERBIRD (mail, vendored tarball) ----------------------------------
+if [ -f "$VEND/betterbird-aarch64.tar.bz2" ]; then
+  echo "I: [pi-studio-browser] installing Betterbird"
+  tar -xf "$VEND/betterbird-aarch64.tar.bz2" -C /opt
+  ln -sf /opt/betterbird/betterbird /usr/local/bin/betterbird
+  cat > /usr/share/applications/betterbird.desktop <<'EOF'
+[Desktop Entry]
+Type=Application
+Name=Betterbird
+GenericName=Mail Client
+Exec=/opt/betterbird/betterbird %u
+Icon=/opt/betterbird/chrome/icons/default/default128.png
+Terminal=false
+Categories=Network;Email;
+MimeType=x-scheme-handler/mailto;
+EOF
+else
+  echo "WARN: [pi-studio-browser] no vendored Betterbird tarball — skipping (add to $VEND)"
+fi
+
+## 5. DEFAULT HANDLERS ------------------------------------------------------
+echo "I: [pi-studio-browser] defaults: Firefox=http/https (flicker-free on all heads), Betterbird=mailto"
+mkdir -p /etc/skel/.config
+# Firefox is the default browser: it's the ONLY browser clean on all flicker
+# heads (no ANGLE -> no head #3 thumbnail flicker) and it HW-decodes via VA-API
+# (hook 63). Chrome/Chromium remain installed as secondaries.
+cat > /etc/skel/.config/mimeapps.list <<'EOF'
+[Default Applications]
+x-scheme-handler/http=firefox.desktop
+x-scheme-handler/https=firefox.desktop
+text/html=firefox.desktop
+x-scheme-handler/mailto=betterbird.desktop
+EOF
+
+echo "I: [pi-studio-browser] done — snap-free; Firefox default, Chromium secondary (rkmpp), betterbird mail"

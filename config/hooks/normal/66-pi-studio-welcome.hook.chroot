@@ -1,0 +1,68 @@
+#!/bin/sh
+#
+# 66-pi-studio-welcome.hook.chroot
+#
+# First-run desktop "Welcome to Pi Studio" panel — a yad dialog shown ONCE per
+# user on first login (autostart + flag file), with Open-Sonic-Pi / Demos buttons.
+# Desktop only, arm64 chroot. Pairs with the cava terminal greeting (console/SSH).
+# Contains ZERO personal/server info — this ships to every user.
+
+set -e
+
+# FLAVOR GATE: studio | desktop | nnp. Read the VALUE, not just the file's
+# existence — a third product (NNP) has no FLAVOR of its own under the old
+# boolean test and would have run every studio hook on a headless server.
+# No file at all = studio, which keeps existing vendor bundles working.
+PI_FLAVOR=studio; [ -r /tmp/pi-studio/FLAVOR ] && PI_FLAVOR=$(tr -d "[:space:]" < /tmp/pi-studio/FLAVOR) || true; [ -n "$PI_FLAVOR" ] || PI_FLAVOR=studio
+[ "$PI_FLAVOR" = studio ] || { echo "I: [flavor] $PI_FLAVOR build - skipping studio-only hook"; exit 0; }
+
+export DEBIAN_FRONTEND=noninteractive
+
+echo "I: [pi-studio-welcome] yad + first-run welcome panel"
+apt-get install -y --no-install-recommends yad || echo "WARN: [pi-studio-welcome] yad install failed (welcome will no-op)"
+
+cat > /usr/local/bin/pi-studio-welcome <<'EOF'
+#!/bin/bash
+# Pi Studio first-run welcome — fires once per user, then never again.
+FLAG="$HOME/.config/pi-studio/.welcomed"
+[ -e "$FLAG" ] && exit 0
+command -v yad >/dev/null 2>&1 || exit 0
+mkdir -p "$(dirname "$FLAG")"
+TEXT='<span size="xx-large" weight="bold">🎛  Welcome to Pi Studio</span>
+<i>A low-latency, snap-free audio studio — yours to command.</i>
+
+🎹  <b>Sonic Pi</b> is in your dock — open it, type <tt>play 70</tt>, hit <b>Run</b>.
+🎵  Demo jams live in <tt>~/Pi-Studio-Demos</tt>.
+🔄  <b>You</b> decide when to update — the <b>Software Update</b> dock button. No nags.
+🎬  Flicker-free 4K → set your display to <b>4K @ 60 Hz</b>.
+
+<small>By design: no snaps · no telemetry · no Pro nags. You decide what runs.</small>
+
+<b>Make some noise.</b>  🟧'
+yad --title="Welcome to Pi Studio" --width=580 --borders=18 --center --on-top \
+    --text="$TEXT" --text-align=left --no-escape \
+    --button="🎹 Open Sonic Pi:2" --button="🎵 Demos:3" --button="Make some noise:0"
+rc=$?
+touch "$FLAG"
+case "$rc" in
+  2) setsid sonic-pi >/dev/null 2>&1 & ;;
+  3) setsid xdg-open "$HOME/Pi-Studio-Demos" >/dev/null 2>&1 & ;;
+esac
+exit 0
+EOF
+chmod 0755 /usr/local/bin/pi-studio-welcome
+
+install -d /etc/skel/.config/autostart
+cat > /etc/skel/.config/autostart/pi-studio-welcome.desktop <<'EOF'
+[Desktop Entry]
+Type=Application
+Name=Pi Studio Welcome
+Comment=First-run welcome
+Exec=/usr/local/bin/pi-studio-welcome
+Icon=sonic-pi
+Terminal=false
+X-GNOME-Autostart-enabled=true
+NoDisplay=true
+EOF
+
+echo "I: [pi-studio-welcome] done — first-run panel armed (once per user)"

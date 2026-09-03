@@ -1,0 +1,203 @@
+#!/bin/sh
+#
+# 63-pi-studio-vaapi-browsers.hook.chroot
+#
+# FULL BUILDOUT: Google Chrome + Firefox, both hardware-decoding video on the
+# RK3588 VPU via the defcom5-rockchip/rockchip-vaapi fork (v2.0.0 "Reframe").
+# This is "path 2" (VA-API) from the HW-decode guide — the path that covers
+# Google Chrome AND Firefox, distinct from the Chromium/rkmpp V4L2 path in
+# hook 62 (the two stacks coexist).
+#
+# REQUIRES NETWORK AT BUILD TIME: Chrome .deb (Google), driver source (GitHub),
+# Firefox (mozillateam PPA). Every step is WARN-not-fail so a network blip
+# degrades gracefully instead of killing the bake — but VERIFY in the soak test
+# (see the validation checklist in the build handoff).
+#
+# Runs AFTER 62 (which adds the liujianfeng PPA that publishes librockchip-mpp-dev
+# and sets the mesa-libgallium pin HW decode depends on).
+set -e
+
+# FLAVOR GATE: GUI flavours only (allowlist, fail-safe for headless NNP)
+PI_FLAVOR=studio; [ -r /tmp/pi-studio/FLAVOR ] && PI_FLAVOR=$(tr -d "[:space:]" < /tmp/pi-studio/FLAVOR) || true
+[ -n "$PI_FLAVOR" ] || PI_FLAVOR=studio
+case "$PI_FLAVOR" in
+  studio|desktop) ;;
+  *) echo "I: [vaapi] $PI_FLAVOR build - skipping GUI-only VA-API hook"; exit 0 ;;
+esac
+export DEBIAN_FRONTEND=noninteractive
+VEND=/tmp/pi-studio
+chmod 1777 /tmp 2>/dev/null || true
+
+## 1. Install the Rockchip VA-API driver (defcom5 fork v2.0.0) ---------------
+# libva sees DRM driver "rockchip-drm", looks for VA driver "rockchip", finds
+# rockchip_drv_video.so. librockchip-mpp-dev comes from the liujianfeng PPA
+# that hook 62 already added.
+echo "I: [vaapi] installing build deps + rockchip VA-API driver"
+apt-get install -y --no-install-recommends build-essential pkg-config git \
+    libva-dev librockchip-mpp-dev vainfo \
+    || echo "W: [vaapi] build-deps install had errors (continuing)"
+# defcom5 fork v2.0.0 "Reframe": 64-align VP9 fix + honest profile advertisement
+# (only hardware-verified codecs offered). Prefer the released, audited .deb;
+# fall back to building our fork's main if the release asset is unreachable.
+if wget -qO /tmp/rockchip-vaapi-driver.deb \
+     "https://github.com/defcom5-rockchip/rockchip-vaapi/releases/download/v2.0.0/rockchip-vaapi-driver_2.0.0_arm64.deb"; then
+  apt-get install -y /tmp/rockchip-vaapi-driver.deb \
+    && echo "I: [vaapi] installed rockchip-vaapi-driver 2.0.0 (Reframe .deb)" \
+    || echo "W: [vaapi] driver .deb install failed — Chrome/FF will software-decode"
+  rm -f /tmp/rockchip-vaapi-driver.deb
+elif git clone --depth=3 https://github.com/defcom5-rockchip/rockchip-vaapi.git /tmp/rk-vaapi 2>/dev/null; then
+  ( cd /tmp/rk-vaapi \
+    && make -j"$(nproc)" \
+    && DRIDIR=$(pkg-config --variable=driverdir libva) \
+    && install -m0644 rockchip_drv_video.so "$DRIDIR/rockchip_drv_video.so" \
+    && echo "I: [vaapi] installed rockchip_drv_video.so (built from defcom5 main) -> $DRIDIR" ) \
+    || echo "W: [vaapi] driver build/install FAILED — Chrome/FF will software-decode"
+  rm -rf /tmp/rk-vaapi
+else
+  echo "W: [vaapi] could not fetch driver (network?) — skipping"
+fi
+# Chrome's sandbox blocks VA-API auto-detect, so the driver name MUST be in env.
+# System-wide (applies to Firefox too after re-login).
+grep -q '^LIBVA_DRIVER_NAME=' /etc/environment 2>/dev/null \
+  || echo 'LIBVA_DRIVER_NAME=rockchip' >> /etc/environment
+# Firefox's RDD (media) process is sandboxed and the sandbox BLOCKS the rockchip
+# VA-API driver -> silent software decode. Allow it. (Pi Claude, verified LIVE on
+# 2.JR .176: Firefox 154 RDD Process holds /dev/mpp_service @~23% CPU = HW decode.)
+# NB: /etc/environment alone is NOT enough for dock/menu-launched Firefox under
+# GDM/Wayland (env-propagation gremlin) -> the launcher is ALSO wrapped below.
+grep -q '^MOZ_DISABLE_RDD_SANDBOX=' /etc/environment 2>/dev/null \
+  || echo 'MOZ_DISABLE_RDD_SANDBOX=1' >> /etc/environment
+
+## 2. Google Chrome (arm64) + persistent HW-decode launcher ------------------
+echo "I: [vaapi] installing Google Chrome (arm64) + HW-decode wrapper"
+if wget -qO /tmp/google-chrome.deb \
+     https://dl.google.com/linux/direct/google-chrome-stable_current_arm64.deb; then
+  apt-get install -y /tmp/google-chrome.deb || echo "W: [vaapi] chrome install failed (continuing)"
+  rm -f /tmp/google-chrome.deb
+  # wrapper: DRM-role launch flags every launch (Chrome reads no flags dir)
+  install -d /etc/skel/.local/bin
+  cat > /etc/skel/.local/bin/google-chrome-hw <<'EOF'
+#!/bin/bash
+# Chrome's 2.0.0 role = DRM/streaming (it self-bundles Google's arm64 Widevine;
+# we never redistribute the CDM). --disable-gpu-compositing kills the ANGLE
+# UI flicker; the HW-decode loss is irrelevant here because Widevine L3 caps
+# DRM streams at ~720p, which software-decodes trivially. Netflix verified.
+# Firefox (default) owns hardware video decode.
+exec /usr/bin/google-chrome-stable \
+  --ozone-platform=wayland --disable-gpu-compositing "$@"
+EOF
+  chmod +x /etc/skel/.local/bin/google-chrome-hw
+  # user launcher overriding the system one to use the wrapper — written clean
+  # (the old sed-mangling of Google's file produced a doubled %U on the main Exec).
+  install -d /etc/skel/.local/share/applications
+  cat > /etc/skel/.local/share/applications/google-chrome.desktop <<'EOF'
+[Desktop Entry]
+Version=1.0
+Name=Google Chrome
+GenericName=Web Browser
+Comment=Streaming & DRM browser (Widevine); Firefox is the daily default
+Exec=sh -c "$HOME/.local/bin/google-chrome-hw %U" _
+StartupNotify=true
+Terminal=false
+Icon=google-chrome
+Type=Application
+Categories=Network;WebBrowser;
+MimeType=text/html;text/xml;application/xhtml_xml;x-scheme-handler/http;x-scheme-handler/https;
+StartupWMClass=Google-chrome
+Actions=new-window;new-private-window;
+[Desktop Action new-window]
+Name=New Window
+Exec=sh -c "$HOME/.local/bin/google-chrome-hw" _
+[Desktop Action new-private-window]
+Name=New Incognito Window
+Exec=sh -c "$HOME/.local/bin/google-chrome-hw --incognito" _
+EOF
+  # belt-and-braces: also flag the SYSTEM .desktop (covers launches that bypass
+  # the user override; Chrome package updates may rewrite this — the user-level
+  # override above is the durable layer).
+  if [ -f /usr/share/applications/google-chrome.desktop ]; then
+    sed -i 's|^Exec=/usr/bin/google-chrome-stable|Exec=/usr/bin/google-chrome-stable --ozone-platform=wayland --disable-gpu-compositing|' \
+      /usr/share/applications/google-chrome.desktop
+  fi
+else
+  echo "W: [vaapi] chrome download failed (network?) — skipping Chrome"
+fi
+
+## 3. Firefox (non-snap, mozillateam PPA) + VA-API prefs ---------------------
+# Ubuntu's 'firefox' is a snap-transition; this image is snap-free, so pull the
+# real .deb from mozillateam and pin it above the transition package.
+echo "I: [vaapi] installing Firefox (non-snap) + VA-API prefs"
+install -d /etc/apt/keyrings
+if [ -f "$VEND/mozillateam.gpg" ]; then
+  install -m644 "$VEND/mozillateam.gpg" /etc/apt/keyrings/mozillateam.gpg
+elif wget -qO- 'https://keyserver.ubuntu.com/pks/lookup?op=get&search=0x0AB215679C571D1C8325275B9BDB3D89CE49EC21' \
+       | gpg --dearmor > /etc/apt/keyrings/mozillateam.gpg 2>/dev/null; then
+  :
+else
+  echo "W: [vaapi] no mozillateam key (vendor $VEND/mozillateam.gpg) — Firefox may be skipped"
+fi
+if [ -s /etc/apt/keyrings/mozillateam.gpg ]; then
+  echo "deb [signed-by=/etc/apt/keyrings/mozillateam.gpg] https://ppa.launchpadcontent.net/mozillateam/ppa/ubuntu noble main" \
+    > /etc/apt/sources.list.d/mozillateam.list
+  printf 'Package: firefox*\nPin: release o=LP-PPA-mozillateam\nPin-Priority: 1001\n' \
+    > /etc/apt/preferences.d/20-mozillateam-firefox.pref
+  apt-get update || echo "W: [vaapi] apt update (mozillateam) had errors"
+  apt-get install -y --no-install-recommends firefox \
+    || apt-get install -y --no-install-recommends firefox-esr \
+    || echo "W: [vaapi] firefox install failed (continuing)"
+fi
+# System-wide VA-API prefs for Firefox (autoconfig). Path covers both firefox &
+# firefox-esr deb layouts; harmless if Firefox didn't install.
+for FFDIR in /usr/lib/firefox /usr/lib/firefox-esr; do
+  if [ -d "$FFDIR" ]; then
+    cat > "$FFDIR/browser/defaults/preferences/vaapi.js" 2>/dev/null <<'EOF'
+// Pi Studio: RK3588 VA-API hardware video decode (rockchip_drv_video.so)
+pref("media.ffmpeg.vaapi.enabled", true);
+pref("media.hardware-video-decoding.enabled", true);
+pref("media.hardware-video-decoding.force-enabled", true);
+pref("media.rdd-ffmpeg.enabled", true);
+pref("gfx.x11-egl.force-enabled", true);
+EOF
+    echo "I: [vaapi] wrote Firefox VA-API prefs -> $FFDIR"
+  fi
+done
+
+# Enterprise policy prefs (survive Firefox package upgrades, unlike the
+# vaapi.js autoconfig above which lives inside the firefox package tree).
+install -d /etc/firefox/policies
+cat > /etc/firefox/policies/policies.json <<'EOF'
+{
+  "policies": {
+    "Preferences": {
+      "media.ffmpeg.vaapi.enabled": { "Value": true, "Status": "default" },
+      "media.hardware-video-decoding.enabled": { "Value": true, "Status": "default" },
+      "media.hardware-video-decoding.force-enabled": { "Value": true, "Status": "default" },
+      "media.rdd-ffmpeg.enabled": { "Value": true, "Status": "default" }
+    }
+  }
+}
+EOF
+echo "I: [vaapi] Firefox enterprise policies written (update-proof VA-API prefs)"
+
+# ★ Firefox HW-decode LAUNCHER wrapper (Pi Claude bake, verified on 2.JR .176).
+# GDM/Wayland does NOT propagate /etc/environment to dock/menu-launched apps, so the
+# RDD-sandbox + driver-name vars MUST be on the launcher's Exec. Ship a /etc/skel
+# override so (a) new users get it and (b) a Firefox pkg update can't clobber it.
+if [ -f /usr/share/applications/firefox.desktop ]; then
+  install -d /etc/skel/.local/share/applications
+  sed -E 's|^Exec=|Exec=env MOZ_DISABLE_RDD_SANDBOX=1 LIBVA_DRIVER_NAME=rockchip |' \
+      /usr/share/applications/firefox.desktop \
+    > /etc/skel/.local/share/applications/firefox.desktop 2>/dev/null \
+    && echo "I: [vaapi] Firefox launcher wrapped (MOZ_DISABLE_RDD_SANDBOX + LIBVA on Exec)" \
+    || echo "W: [vaapi] could not wrap firefox.desktop launcher"
+fi
+
+## 4. Update the stale flicker note --------------------------------------------
+# The 4K@120 windowed flicker is now fixed in-kernel (VOP2 layer_sel converge
+# patch), so the old "flicker is off-label, use the manual workaround" guidance
+# no longer applies. Drop the end-user how-to caveat if present.
+[ -f /usr/local/share/pi-studio/Pi-Studio-HowTo.txt ] && \
+  sed -i '/disable-gpu-compositing/d; /4K@120.*flicker/d' \
+      /usr/local/share/pi-studio/Pi-Studio-HowTo.txt 2>/dev/null || true
+
+echo "I: [vaapi] done — Chrome (google-chrome-hw) + Firefox, VA-API HW decode; flicker fixed in-kernel"

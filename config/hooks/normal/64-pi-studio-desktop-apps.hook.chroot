@@ -1,0 +1,175 @@
+#!/bin/sh
+#
+# 64-pi-studio-desktop-apps.hook.chroot — PI DESKTOP flavor payload (v1.0-BETA).
+# Runs ONLY on desktop bakes; Studio and NNP bakes exit immediately, so their
+# images are unchanged.
+#
+# Spec: HANDOFF-pi-desktop-v1-spec.md + HANDOFF-pi-desktop-BETA-bake.md
+# (all beta deltas root-caused on the 3-day alpha soak).
+# Curation rule: one visible tool per job; ship what's hard to get right;
+# every shipped default is a promise.
+# CURATOR DECISIONS ON RECORD (do not "fix"): NO Vivaldi, NO Betterbird,
+# NO temp-gauge extension, NO search — guides over vendored promises.
+
+set -e
+
+V=/tmp/pi-studio
+# FLAVOR GATE: studio | desktop | nnp. This is the DESKTOP-only polarity — under
+# the old boolean test any bake carrying a FLAVOR file matched, so NNP would have
+# installed the whole desktop app payload onto a headless server.
+PI_FLAVOR=studio; [ -r "$V/FLAVOR" ] && PI_FLAVOR=$(tr -d "[:space:]" < "$V/FLAVOR") || true; [ -n "$PI_FLAVOR" ] || PI_FLAVOR=studio
+[ "$PI_FLAVOR" = desktop ] || { echo "I: [pi-desktop] $PI_FLAVOR build - skipping desktop-only hook"; exit 0; }
+
+export DEBIAN_FRONTEND=noninteractive
+apt-get update
+
+echo "I: [pi-desktop] GNOME de-junk (games/cheese/maps/contacts/tour/totem out; VLC replaces totem)"
+apt-get purge -y aisleriot gnome-mahjongg gnome-mines gnome-sudoku cheese \
+    gnome-maps gnome-contacts gnome-tour totem totem-plugins 2>/dev/null || true
+
+# ⚠️ HARD-WON LESSON (2026-07-21): do NOT purge casper here, and do NOT
+# glob-purge sssd. The /usr/sbin/update-initramfs diversion is a LOCAL diversion
+# by livecd-rootfs (not casper) — the shared 69-zz casper-fix hook resolves it at
+# the very end, restoring the real 6908-byte binary, exactly as it does for Studio.
+# Two earlier attempts died here: (1) `apt-get purge 'sssd*'` CASCADES —
+# ubuntu-desktop-rockchip depends on sssd, so the glob rips out the desktop
+# metapackages, ORPHANING casper; casper's later orphan-removal in config-image
+# then collides with the diversion and deletes update-initramfs -> no image.
+# (2) purging casper directly fails silently (ubiquity depends on it). The cure is
+# to change NOTHING about casper/sssd and let Studio's proven diversion handling
+# run. Keep it simple; keep casper installed. spice-vdagent is a safe leaf purge.
+echo "I: [pi-desktop] boot-noise purge (spice-vdagent only; casper+sssd left alone — see hook comment)"
+apt-get purge -y spice-vdagent 2>/dev/null || true
+
+echo "I: [pi-desktop] de-Canonical block (telemetry/nags off; engine stays Ubuntu)"
+apt-get purge -y whoopsie apport ubuntu-report popularity-contest 2>/dev/null || true
+[ -f /etc/default/motd-news ] && sed -i 's/^ENABLED=.*/ENABLED=0/' /etc/default/motd-news || true
+printf 'APT::Periodic::Update-Package-Lists "0";\nAPT::Periodic::Unattended-Upgrade "0";\n' \
+    > /etc/apt/apt.conf.d/20auto-upgrades
+
+echo "I: [pi-desktop] core apps: VLC (dock) + mpv (engine) + LibreOffice + monitoring"
+apt-get install -y --no-install-recommends vlc mpv btop gnome-system-monitor zram-tools
+
+# Pro Updates (Operation Facehugger): free security fixes without Ubuntu Pro.
+# Installer bundle staged in the vendor payload; it installs CLI+GUI+launcher
+# and its own deps (flatpak, python3-gi/apt) — run from the bundle dir as root.
+if [ -f /tmp/pi-studio/pro-updates/install-pro-updates.sh ]; then
+  ( cd /tmp/pi-studio/pro-updates && bash install-pro-updates.sh ) \
+    && echo "I: [pi-desktop] Pro Updates installed (CLI + GUI + launcher)" \
+    || echo "W: [pi-desktop] Pro Updates install FAILED"
+else
+  echo "W: [pi-desktop] pro-updates bundle missing from vendor"
+fi
+
+# mpv 0.38: hardware decode by default for every new user (VAAPI via our driver).
+install -d /etc/skel/.config/mpv
+cat > /etc/skel/.config/mpv/mpv.conf <<'EOF'
+# Pi-Desktop default: hardware video decode via VA-API (rockchip-vaapi-driver).
+hwdec=auto
+EOF
+echo "I: [pi-desktop] skel mpv.conf written (hwdec=auto)"
+
+# Hide the dormant eMMC OS partition (construct-root) from the Files sidebar —
+# a second bootable root advertised as a clickable disk is untidy on a shipped image.
+install -d /etc/udev/rules.d
+cat > /etc/udev/rules.d/99-pi-desktop-hide-altroot.rules <<'EOF'
+ENV{ID_FS_LABEL}=="construct-root", ENV{UDISKS_IGNORE}="1"
+EOF
+echo "I: [pi-desktop] udev rule: construct-root hidden from file manager"
+
+# Custom vendor debs (the debs/ manifest is bookkeeping only — nothing installs
+# it generically; each deb is installed EXPLICITLY here, house pattern).
+VDEBS=/tmp/pi-studio/pi-studio-image/debs
+if [ -f "$VDEBS/defcom5-mpv038_0.38.0_arm64.deb" ]; then
+  apt-get install -y "$VDEBS/defcom5-mpv038_0.38.0_arm64.deb" \
+    && echo "I: [pi-desktop] mpv 0.38 engine installed (/opt/mpv038, Wayland DnD)" \
+    || echo "W: [pi-desktop] mpv038 deb install failed"
+else
+  echo "W: [pi-desktop] mpv038 deb missing from vendor"
+fi
+if [ -f "$VDEBS/defcom5-betterbird_1.0.0_arm64.deb" ]; then
+  apt-get install -y "$VDEBS/defcom5-betterbird_1.0.0_arm64.deb" \
+    && echo "I: [pi-desktop] betterbird installed (default mailto handler now real)" \
+    || echo "W: [pi-desktop] betterbird deb install failed"
+fi
+apt-get install -y libreoffice-writer libreoffice-calc libreoffice-impress libreoffice-gtk4
+
+echo "I: [pi-desktop] chromium-sandbox (alpha shipped without -> HW-decode Chromium incomplete)"
+apt-get install -y chromium-sandbox
+[ -e /usr/lib/chromium/chrome-sandbox ] || { echo "E: [pi-desktop] chrome-sandbox missing after install" >&2; exit 1; }
+
+echo "I: [pi-desktop] VSCodium (telemetry-free VS Code) + Electron flicker fix"
+[ -f "$V/vscodium_arm64.deb" ] || { echo "E: [pi-desktop] vscodium deb missing from vendor" >&2; exit 1; }
+apt-get install -y "$V/vscodium_arm64.deb"
+# Electron flicker fix on this GPU stack: --disable-gpu-compositing for CODIUM ONLY.
+# (NEVER put this flag on Chromium's launcher — it kills hardware video decode.)
+for d in /usr/share/applications/codium.desktop; do
+    [ -f "$d" ] && sed -i 's|^Exec=/usr/share/codium/codium |Exec=/usr/share/codium/codium --disable-gpu-compositing |; s|^Exec=codium |Exec=codium --disable-gpu-compositing |' "$d"
+done
+grep -q 'disable-gpu-compositing' /usr/share/applications/codium.desktop \
+    && echo "I: [pi-desktop] codium launcher flicker-fixed" \
+    || { echo "E: [pi-desktop] codium .desktop flag NOT applied" >&2; exit 1; }
+
+echo "I: [pi-desktop] pw-jack transparency (same fix as Studio v1.3)"
+install -m 0644 "$V/00-pipewire-jack.conf" /etc/ld.so.conf.d/00-pipewire-jack.conf
+apt-get install -y pipewire-jack
+ldconfig
+ldconfig -p | grep 'libjack\.so\.0 ' | head -1 | grep -q pipewire \
+    || { echo "E: [pi-desktop] libjack ordering wrong" >&2; exit 1; }
+
+echo "I: [pi-desktop] throughput config: zram (zstd — kernel has NO lz4) + BBR/fq_codel"
+# Alpha finding: zram-tools defaults to lz4, absent from this kernel -> service died.
+# zstd is present. The stock 1G /swapfile stays as a harmless prio -2 fallback (decided).
+printf 'ALGO=zstd\nPERCENT=50\n' > /etc/default/zramswap
+systemctl enable zramswap.service
+# bfq udev rule REMOVED (beta): CONFIG_IOSCHED_BFQ is not in the desktop kernel —
+# the alpha's rule referenced a ghost. mq-deadline is fine for eMMC/SD.
+# TODO next kernel spin: CONFIG_IOSCHED_BFQ=m, then reinstate the rule.
+rm -f /etc/udev/rules.d/60-pi-desktop-iosched.rules
+printf 'net.core.default_qdisc=fq_codel\nnet.ipv4.tcp_congestion_control=bbr\n' \
+    > /etc/sysctl.d/90-pi-desktop-net.conf
+
+echo "I: [pi-desktop] system dconf defaults: screen blank OFF (fences inherited Riek-era wake coma)"
+# 12 closed-unresolved wake issues in the archived base tracker; recovery if a user
+# re-enables blanking and hits the coma: chvt 3; chvt 1. Shipped as a SYSTEM default
+# so every user inherits it; users can still change it in Settings.
+apt-get install -y dconf-cli
+mkdir -p /etc/dconf/db/local.d /etc/dconf/profile
+cat > /etc/dconf/profile/user <<'PROF'
+user-db:user
+system-db:local
+PROF
+cat > /etc/dconf/db/local.d/00-pi-desktop-power <<'DCONF'
+[org/gnome/desktop/session]
+idle-delay=uint32 0
+
+[org/gnome/settings-daemon/plugins/power]
+sleep-inactive-ac-type='nothing'
+sleep-inactive-battery-type='nothing'
+DCONF
+dconf update
+[ -f /etc/dconf/db/local ] || { echo "E: [pi-desktop] dconf db not compiled" >&2; exit 1; }
+
+echo "I: [pi-desktop] branding trio: hostname + PRETTY_NAME + fastfetch w/ temp line"
+echo pidesktop > /etc/hostname
+sed -i 's/127\.0\.1\.1.*/127.0.1.1\tpidesktop/' /etc/hosts || true
+# os-release: PRETTY_NAME only — engine stays Ubuntu (NAME/ID untouched so apt/scripts
+# keep behaving). base-files upgrades may refresh this; re-check per release.
+# "2.0.0" = the BSP line continues: defcom5-maintained (driver fork v2.0 "Reframe", browser row v2).
+# JR marks it as the BSP fork so the plain "Pi-Desktop" name is free for the future
+# mainline (Debian/Panthor) successor. Final = no more BSP releases after this — the
+# VOP2 layer_sel flicker fix, cma=512M, and the VA-API Chrome+Firefox stack close it out.
+sed -i 's|^PRETTY_NAME=.*|PRETTY_NAME="Pi-Desktop 2.0.1 — Ubuntu 24.04 LTS"|' /usr/lib/os-release
+grep -q 'Pi-Desktop 2.0.1' /usr/lib/os-release || { echo "E: [pi-desktop] PRETTY_NAME not applied" >&2; exit 1; }
+# fastfetch: vendored arm64 deb (not in noble repos) + skel config with the SoC temp
+# line (sysfs thermal zone — the zero-debt instrumentation answer; no extensions).
+if [ -f "$V/fastfetch_arm64.deb" ]; then
+    apt-get install -y "$V/fastfetch_arm64.deb"
+    mkdir -p /etc/skel/.config/fastfetch
+    cp "$V/fastfetch-config.jsonc" /etc/skel/.config/fastfetch/config.jsonc
+    echo "I: [pi-desktop] fastfetch + temp-line config installed"
+else
+    echo "W: [pi-desktop] fastfetch deb not vendored — skipping (guide covers it)" >&2
+fi
+
+echo "I: [pi-desktop] done — BETA payload complete (apps + fixes + defaults + branding)"

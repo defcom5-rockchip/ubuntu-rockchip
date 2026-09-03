@@ -1,0 +1,86 @@
+#!/bin/sh
+#
+# 67-pi-studio-howto.hook.chroot
+#
+# Drops a plain-text "Pi Studio — How-To" note on the desktop. Two topics:
+#   1. Avoiding 4K@120 windowed flicker — the ZERO-DOWNSIDE answer is "run the
+#      desktop at 4K@60". Does NOT tell users to disable GPU compositing (that
+#      breaks hardware video decode — the real HW-decode fix is the shipped
+#      `chromium-sandbox` package, see Pi Claude's handoff §3).
+#   2. Enabling Widevine DRM in Chromium + Vivaldi (not bundled; instructions only).
+set -e
+
+# FLAVOR GATE: studio | desktop | nnp. Read the VALUE, not just the file's
+# existence — a third product (NNP) has no FLAVOR of its own under the old
+# boolean test and would have run every studio hook on a headless server.
+# No file at all = studio, which keeps existing vendor bundles working.
+PI_FLAVOR=studio; [ -r /tmp/pi-studio/FLAVOR ] && PI_FLAVOR=$(tr -d "[:space:]" < /tmp/pi-studio/FLAVOR) || true; [ -n "$PI_FLAVOR" ] || PI_FLAVOR=studio
+[ "$PI_FLAVOR" = studio ] || { echo "I: [flavor] $PI_FLAVOR build - skipping studio-only hook"; exit 0; }
+
+echo "I: [pi-studio-howto] installing desktop How-To note"
+
+install -d /etc/skel/Desktop
+cat > /etc/skel/Desktop/Pi-Studio-HowTo.txt <<'HOWTO'
+═══════════════════════════════════════════════════════════════════════
+  PI STUDIO — HOW-TO
+═══════════════════════════════════════════════════════════════════════
+
+──────────────────────────────────────────────────────────────────────
+ 1. SCREEN FLICKER AT 4K@120 — and how to avoid it
+──────────────────────────────────────────────────────────────────────
+Pi Studio runs smooth at the default 4K@60. Keep the desktop there for
+everyday use and you will never see flicker.
+
+You may see flicker ONLY if you set a WINDOW to 4K@120. That's a hardware
+limit of the RK3588 video pipeline (not a bug), and the fix is simple:
+
+    • For windowed/desktop work: keep the display at 4K@60.
+      (Settings → Displays → Refresh Rate → 60.00 Hz)
+    • For 4K@120: use it for FULL-SCREEN video — fullscreen never flickers.
+
+⚠ DO NOT try to fix flicker by disabling Chromium's GPU compositing
+  (e.g. a "--disable-gpu-compositing" flag). It turns OFF hardware video
+  decoding, so 4K video stutters and drops frames. Running at 4K@60 is the
+  real, zero-downside answer.
+
+──────────────────────────────────────────────────────────────────────
+ 2. ENABLE STREAMING DRM (Widevine) — Netflix, Spotify, etc.
+    for CHROMIUM and VIVALDI
+──────────────────────────────────────────────────────────────────────
+Google does not ship an arm64 Widevine module, and Pi Studio cannot bundle
+it (it's Google-proprietary). You enable it yourself in one go — it pulls
+the arm64 module out of a ChromeOS image and installs it for both browsers.
+(Needs an internet connection. Running the installer accepts Google's
+Widevine terms of service.)
+
+    # 1) install the arm64 Widevine module system-wide
+    git clone https://github.com/AsahiLinux/widevine-installer
+    cd widevine-installer
+    sudo ./widevine-installer
+
+    # 2) point both browsers at it
+    sudo ln -sfn /var/lib/widevine/WidevineCdm /opt/vivaldi/WidevineCdm
+    sudo ln -sfn /var/lib/widevine/WidevineCdm /usr/lib/chromium-browser/WidevineCdm
+
+    # 3) fully quit and reopen both browsers
+
+To VERIFY it worked:
+    • Chromium:  open  chrome://components
+    • Vivaldi:   open  vivaldi://components
+    Look for "Widevine Content Decryption Module" — it should show a real
+    version number (NOT 0.0.0.0). Then try a DRM title (Netflix, Spotify
+    web player, or the Bitmovin DRM demo).
+
+To UPDATE Widevine later, just re-run  sudo ./widevine-installer .
+
+═══════════════════════════════════════════════════════════════════════
+HOWTO
+
+# also drop it into any already-created home dirs (default user baked first)
+for h in /home/*; do
+  [ -d "$h" ] || continue
+  install -d "$h/Desktop"
+  install -m 0644 /etc/skel/Desktop/Pi-Studio-HowTo.txt "$h/Desktop/Pi-Studio-HowTo.txt"
+  chown "$(stat -c %u:%g "$h")" "$h/Desktop/Pi-Studio-HowTo.txt" 2>/dev/null || true
+done
+echo "I: [pi-studio-howto] done"

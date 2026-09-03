@@ -10,8 +10,12 @@ Upstream changes from [Joshua-Riek/ubuntu-rockchip](https://github.com/Joshua-Ri
 
 ## [Unreleased]
 
+### Added
+- **WiiM Play** ships by default on the **desktop** flavor — a GTK3 UPnP/DLNA control point for [WiiM music streamers](https://www.wiimhome.com/). Built from source (pinned to upstream [`shumatech/wiimplay`](https://github.com/shumatech/wiimplay) `v0.2`, GPLv3) inside the live-build chroot via `config/hooks/normal/50-wiimplay.hook.chroot`; installs `/usr/bin/wiimplay` + a system launcher, then purges the build toolchain so it doesn't bloat the image. Not included on the server flavor (no GUI).
+- Audio HDMI⇄Bluetooth switching notes at `/usr/share/doc/wiim-play/audio-output.md` (PipeWire output switching + the Bluetooth 24-bit/96 kHz LDAC ceiling vs. full-resolution HDMI).
+
 ### Planned
-- Rebuild `hcitools` from [Orange Pi's published source](https://github.com/orangepi-xunlong/orangepi-build/tree/next/external/cache/sources/hcitools) to replace the inherited binary blob in `/usr/bin/`.
+- Rebuild `brcm_patchram_plus` from source to replace the inherited blob (overlay → `/usr/bin/`) used for AP6275P / BCM4362A2 Bluetooth firmware loading. **First attempt failed hardware validation:** Orange Pi's *current* source revision (vendored at `packages/brcm-patchram-plus/`, Apache-2.0) compiles cleanly on Noble arm64 but the resulting binary never completes the firmware download / line-discipline step, wedging the chip until reboot — it's a newer/different revision than the one that built the working blob. Needs the matching upstream revision before this is viable. See `packages/brcm-patchram-plus/VALIDATION-FAILED.md`. (Supersedes the earlier mis-scoped "rebuild hcitools" item: Orange Pi's `hcitools` source builds `hciattach`/`hcitool`/`hciconfig`, none of which the 5B uses.)
 - Evaluate RK3588 4K@120Hz support (VOP2 dclk limits) from upstream PR #1326, pending hardware verification on Orange Pi 5B.
 
 ---
@@ -89,7 +93,7 @@ Initial public release of the defcom5-rockchip fork. Continuation of Joshua-Riek
 - All board overlays, device trees, firmware, and userspace overlays from Joshua-Riek's last public release.
 - `EXTRA_PPAS=jjriek/rockchip jjriek/rockchip-multimedia` for userspace packages. These PPAs are no longer maintained but the package versions there remain installable.
 - Panfork Mesa PPA (`ppa:jjriek/panfork-mesa`) for Mali G610 GPU support — also no longer actively maintained.
-- `hcitools` binary blob in `/usr/bin/` for Bluetooth firmware loading on RK3588 combo chips.
+- `brcm_patchram_plus` binary blob (overlay → `/usr/bin/`) for AP6275P / BCM4362A2 Bluetooth firmware loading on the Orange Pi 5B.
 
 ---
 

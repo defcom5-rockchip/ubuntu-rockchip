@@ -1,0 +1,182 @@
+#!/bin/sh
+#
+# 67-pi-studio-muse.hook.chroot — MUSE with VOICE (Pi Studio v1.4) — v3.
+# v2 shipped assets that RESOLVED but launchers/rpath/desktop still carried the
+# build-box layout (/home/orange/…) → Muse dead on arrival (REPORT-v1.4-first-boot,
+# findings 3/5/6/8 = NO-GO, all packaging). v3 = the re-bake checklist, in code,
+# with a gate per finding. Core AI was bench-PROVEN (compose/voice/live-edit).
+
+set -e
+
+V=/tmp/pi-studio
+# FLAVOR GATE: studio | desktop | nnp. Read the VALUE, not just the file's
+# existence. No file at all = studio, which keeps existing bundles working.
+# NOTE for NNP: Muse is planned there as Home Assistant's conversation agent,
+# but that's a DIFFERENT payload (OpenAI-compatible HTTP wrapper, no Sonic Pi
+# integration). It gets its own hook rather than relaxing this gate to studio|nnp.
+PI_FLAVOR=studio; [ -r "$V/FLAVOR" ] && PI_FLAVOR=$(tr -d "[:space:]" < "$V/FLAVOR") || true; [ -n "$PI_FLAVOR" ] || PI_FLAVOR=studio
+[ "$PI_FLAVOR" = studio ] || { echo "I: [muse] $PI_FLAVOR build - skipping studio AI hook"; exit 0; }
+M="$V/muse"
+[ -d "$M" ] || { echo "E: [muse] vendor muse/ payload missing" >&2; exit 1; }
+
+export DEBIAN_FRONTEND=noninteractive
+# ⚠️ NEVER pipe apt-get here: `apt | tail` returns tail's exit status, so a failed
+# install sails past `set -e` and the next command dies mysteriously (2026-07-28:
+# patchelf silently failed to install -> hook died -> partial chroot got shipped).
+echo "I: [muse] deps (zram-tools per finding 2; patchelf best-effort for rpath)"
+# NOTE: pw-record lives in **pipewire-bin** on Ubuntu (verified `dpkg -S /usr/bin/pw-record`).
+# The handoff said "pipewire-utils" — no such package in noble; that name failed the bake
+# (loudly, thanks to the un-piped apt + the new fatal lb-build guard). Gate on the BINARY,
+# not the package name — same lesson as initramfs-tools vs initramfs-tools-core.
+apt-get install -y python3-gi-cairo pipewire-bin gnome-terminal ruby zram-tools
+[ -x /usr/bin/pw-record ] || { echo "E: [muse] pw-record missing after install — /voice capture would be dead" >&2; exit 1; }
+apt-get install -y patchelf || echo "W: [muse] patchelf unavailable — using ld.so.conf path for finding 6"
+
+echo "I: [muse] python package -> dist-packages"
+PYDEST=$(python3 -c 'import sysconfig; print(sysconfig.get_paths()["purelib"])')
+mkdir -p "$PYDEST"; cp -r "$M/pkg/muse" "$PYDEST/"
+python3 -c 'import muse' || { echo "E: [muse] import muse FAILED" >&2; exit 1; }
+
+echo "I: [muse] launchers -> /usr/bin, SCRUBBED of build-box paths (findings 5)"
+for b in muse muse-session muse-cheatsheet; do
+    install -m 0755 "$M/bin/$b" /usr/bin/"$b"
+    # any $HOME/.local/bin/X or /home/orange/.local/bin/X exec -> bare command (PATH)
+    sed -i -e 's|"\$HOME/.local/bin/\([a-z-]*\)"|\1|g' -e 's|\$HOME/.local/bin/\([a-z-]*\)|\1|g' \
+           -e 's|/home/orange/.local/bin/\([a-z-]*\)|\1|g' -e 's|/home/orange/Development|$HOME/Development|g' /usr/bin/"$b"
+done
+grep -l '/home/orange' /usr/bin/muse /usr/bin/muse-session /usr/bin/muse-cheatsheet 2>/dev/null \
+    && { echo "E: [muse] build-box path survived in a launcher (finding 5/8 class)" >&2; exit 1; } || true
+
+echo "I: [muse] skel ~/.local/bin symlinks (belt+braces for any script that insists)"
+install -d /etc/skel/.local/bin
+for b in muse muse-session muse-cheatsheet; do ln -sf /usr/bin/"$b" /etc/skel/.local/bin/"$b"; done
+
+echo "I: [muse] headless-osc -> /etc/skel/Development/sonic-pi-rk3588/... (finding 3: where muse-session LOOKS)"
+SKHO=/etc/skel/Development/sonic-pi-rk3588/config/headless-osc
+install -d "$SKHO"
+install -m 0644 "$M/headless-osc/sonic-pi-osc-headless.rb" "$SKHO/"
+install -m 0644 "$M/headless-osc/sonic-pi-osc.service" "$SKHO/"
+[ -f "$SKHO/sonic-pi-osc-headless.rb" ] || { echo "E: [muse] headless launcher not in skel (finding 3)" >&2; exit 1; }
+
+echo "I: [muse] /opt/muse store: whisper + RPATH FIX (finding 6)"
+[ -x "$M/whisper-bin/whisper-cli" ] || { echo "E: [muse] whisper-cli not staged" >&2; exit 1; }
+install -d /opt/muse/whisper/bin /opt/muse/whisper/models
+cp -a "$M/whisper-bin/." /opt/muse/whisper/bin/
+chmod 755 /opt/muse/whisper/bin/whisper-cli
+# FINDING 6 — the binary's DT_RUNPATH points at the build box (/home/orange/...).
+# TWO independent cures, so neither is a single point of failure:
+#  (a) ld.so.conf entry + ldconfig — the stale RUNPATH names a nonexistent dir, so
+#      the loader falls through to the cache and finds the libs. Needs no tooling.
+#  (b) patchelf --set-rpath '$ORIGIN' when patchelf exists (best-effort).
+echo '/opt/muse/whisper/bin' > /etc/ld.so.conf.d/muse-whisper.conf
+ldconfig
+ldconfig -p | grep -q 'libwhisper\.so\.1' \
+    || { echo "E: [muse] libwhisper not in ld cache — /voice would die (finding 6)" >&2; exit 1; }
+if command -v patchelf >/dev/null 2>&1; then
+    patchelf --set-rpath '$ORIGIN' /opt/muse/whisper/bin/whisper-cli \
+        && echo "I: [muse] whisper rpath also set to \$ORIGIN (belt+braces)"
+fi
+[ -f "$M/whisper-models/ggml-base.en.bin" ] || { echo "E: [muse] ggml-base.en.bin missing" >&2; exit 1; }
+install -m 0644 "$M/whisper-models/ggml-base.en.bin" /opt/muse/whisper/models/
+
+echo "I: [muse] /opt/muse store: rkllm 1.2.3 (PINNED) + Qwen3"
+[ -f "$M/rkllm/librkllmrt.so" ] || { echo "E: [muse] librkllmrt missing" >&2; exit 1; }
+install -d /opt/muse/rkllm
+install -m 0644 "$M/rkllm/librkllmrt.so" /opt/muse/rkllm/librkllmrt.so
+QM="$M/rkllm/Qwen3-1.7B-w8a8-rk3588.rkllm"
+[ -f "$QM" ] || { echo "E: [muse] Qwen3 model missing" >&2; exit 1; }
+install -m 0644 "$QM" /opt/muse/rkllm/
+install -d /usr/local/lib; ln -sf /opt/muse/rkllm/librkllmrt.so /usr/local/lib/librkllmrt.so
+
+echo "I: [muse] skel ~/Development asset symlinks (bench-PROVEN in v1.4 first cut)"
+SK=/etc/skel/Development
+install -d "$SK/rkllm/lib-1.2.3" "$SK/rkllm/models" "$SK/whisper.cpp/build"
+ln -sf /opt/muse/rkllm/librkllmrt.so "$SK/rkllm/lib-1.2.3/librkllmrt.so"
+ln -sf /opt/muse/rkllm/Qwen3-1.7B-w8a8-rk3588.rkllm "$SK/rkllm/models/Qwen3-1.7B-w8a8-rk3588.rkllm"
+ln -sfn /opt/muse/whisper/bin "$SK/whisper.cpp/build/bin"
+ln -sfn /opt/muse/whisper/models "$SK/whisper.cpp/models"
+
+echo "I: [muse] .desktop entries: /usr/bin Execs, no geometry, real icon (findings 8/10/9)"
+for d in muse muse-cheatsheet; do
+    install -m 0644 "$M/applications/$d.desktop" /usr/share/applications/
+    sed -i -e 's|/home/orange/.local/bin/|/usr/bin/|g' -e 's|\$HOME/.local/bin/|/usr/bin/|g' \
+           -e 's| --geometry=[0-9x]*||g' /usr/share/applications/$d.desktop
+done
+grep -l '/home/orange\|geometry' /usr/share/applications/muse.desktop /usr/share/applications/muse-cheatsheet.desktop 2>/dev/null \
+    && { echo "E: [muse] .desktop still carries build-box path/geometry (finding 8/10)" >&2; exit 1; } || true
+# FINDING 9 — the real pi-studio icon set (ARMED-orange pi + sound waves), staged by
+# Pi Claude: scalable SVG + 256 + 512 hicolor. Install the whole set so GNOME picks the
+# right size (dash, alt-tab, notifications) instead of scaling one bitmap.
+if [ -d "$M/icons/hicolor" ]; then
+    cp -r "$M/icons/hicolor/." /usr/share/icons/hicolor/
+    command -v gtk-update-icon-cache >/dev/null && gtk-update-icon-cache -qf /usr/share/icons/hicolor || true
+    [ -f /usr/share/icons/hicolor/scalable/apps/pi-studio.svg ] \
+        || { echo "E: [muse] icon set copied but scalable/pi-studio.svg absent (finding 9)" >&2; exit 1; }
+    echo "I: [muse] pi-studio icon set installed ($(find "$M/icons/hicolor" -type f | wc -l) files: svg+256+512)"
+elif [ -f "$V/pi-studio-image/assets/armed-dj-penguin-solo.png" ]; then
+    install -d /usr/share/icons/hicolor/512x512/apps
+    install -m 0644 "$V/pi-studio-image/assets/armed-dj-penguin-solo.png" /usr/share/icons/hicolor/512x512/apps/pi-studio.png
+    command -v gtk-update-icon-cache >/dev/null && gtk-update-icon-cache -qf /usr/share/icons/hicolor || true
+    echo "W: [muse] real icon set NOT staged — using armed-DJ mascot fallback (finding 9)"
+else
+    echo "W: [muse] no pi-studio icon at all — launchers will render generic (finding 9)"
+fi
+
+echo "I: [muse] pin Muse to the dash next to Sonic Pi (finding 4)"
+# Done HERE, not in pi-studio-image-customize.sh: that script only writes its default
+# favorites list when NO override exists yet — by then one does, so it takes the
+# "patch existing" branch and muse never landed (v1.4 bake 2026-07-28). This hook runs
+# last, so whatever it writes wins.
+FAV=$(grep -rl 'favorite-apps' /usr/share/glib-2.0/schemas/*.override 2>/dev/null | head -1)
+if [ -n "$FAV" ]; then
+    if ! grep -q 'muse.desktop' "$FAV"; then
+        if grep -q "'sonic-pi.desktop'," "$FAV"; then
+            sed -i "s/'sonic-pi.desktop',/'sonic-pi.desktop', 'muse.desktop', 'muse-cheatsheet.desktop',/" "$FAV"
+        else
+            sed -i "s/\(favorite-apps=\[\)/\1'muse.desktop', 'muse-cheatsheet.desktop', /" "$FAV"
+        fi
+    fi
+else
+    cat > /usr/share/glib-2.0/schemas/92_pi-studio-muse-dock.gschema.override <<'DOCK'
+[org.gnome.shell]
+favorite-apps=['sonic-pi.desktop', 'muse.desktop', 'muse-cheatsheet.desktop', 'chromium.desktop', 'org.gnome.Nautilus.desktop', 'org.gnome.Terminal.desktop']
+DOCK
+fi
+glib-compile-schemas /usr/share/glib-2.0/schemas/ >/dev/null 2>&1 || true
+grep -rq 'muse.desktop' /usr/share/glib-2.0/schemas/*.override 2>/dev/null \
+    || { echo "E: [muse] failed to pin Muse to the dash (finding 4)" >&2; exit 1; }
+echo "I: [muse] Muse + cheatsheet pinned to dash favorites"
+
+echo "I: [muse] zram-zstd (finding 2) + os-release branding (finding 1)"
+printf 'ALGO=zstd\nPERCENT=50\n' > /etc/default/zramswap
+systemctl enable zramswap.service
+sed -i 's|^PRETTY_NAME=.*|PRETTY_NAME="Pi Studio 1.4 — Ubuntu 24.04 LTS"|' /usr/lib/os-release
+grep -q 'Pi Studio' /usr/lib/os-release || { echo "E: [muse] PRETTY_NAME not applied (finding 1)" >&2; exit 1; }
+
+echo "I: [muse] docs: PHRASEBOOK + one-at-a-time card (+ finding 7 onboarding line)"
+install -d /usr/share/pi-studio
+[ -f "$M/pkg/PHRASEBOOK.md" ] && install -m 0644 "$M/pkg/PHRASEBOOK.md" /usr/share/pi-studio/PHRASEBOOK.md \
+    || { echo "E: [muse] PHRASEBOOK.md missing" >&2; exit 1; }
+cat > /usr/share/pi-studio/MUSE-OR-SONIC-PI.md <<'CARD'
+# MUSE OR SONIC PI? — one at a time.
+Muse and the Sonic Pi app share ONE audio engine. Run either — not both.
+- Want the AI bandmate? Launch **Muse** (say "add a bassline" — the groove never stops).
+- Want the classic editor? Launch **Sonic Pi**.
+- Switching: quit one fully, then start the other. (Muse<->GUI coexistence: coming in v1.5.)
+
+## Talking to Muse: describe the SOUND, not the artist
+Muse composes from descriptions — genre, feel, tempo, instruments:
+  "slow dub groove with deep bass"   /   "fast house, bright chords, four-on-the-floor"
+Artist or band names ("play some Ohio Players") won't produce code — Muse doesn't
+imitate artists; it speaks *music*. See PHRASEBOOK.md — the vocabulary IS the manual.
+(Voice tip: it hears music words — if "cymbals" lands as "symbols", it still knows.)
+
+## Getting help from an AI assistant (free learning loop)
+Muse writes the code; any chatbot can explain it. Paste this first so it has context:
+> "I'm running Pi Studio on an Orange Pi 5B. Muse is its local AI copilot that turns
+> plain English into Sonic Pi (Ruby) live-coding music. Please explain what this
+> Sonic Pi code does, musically and technically:"
+Then paste the code Muse wrote. Works with free-tier Claude or any assistant.
+CARD
+
+echo "I: [muse] v3 gates ALL passed — findings 1/2/3/5/6/8/10 fixed in-image; 9 icon=$([ -n "$ICON_SRC" ] && echo shipped || echo pending); 4 favorites in customize script"

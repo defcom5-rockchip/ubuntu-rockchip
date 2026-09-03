@@ -1,0 +1,33 @@
+#!/bin/sh
+#
+# 60-pi-studio-no-suspend.hook.chroot
+#
+# RK3588 suspend-to-RAM (S3) does not reliably resume on the vendor 6.1 BSP —
+# the board "won't wake." So Pi Studio ships with sleep fully disabled (the
+# screen may still blank; only system suspend is killed). Desktop flavor only
+# (copied in when PROJECT=ubuntu, see build-rootfs.sh).
+#
+# Runs inside the live-build chroot (arm64 via qemu) as root. systemctl isn't
+# running here, so we mask the targets the offline-safe way: symlink to /dev/null.
+
+set -e
+
+echo "I: [pi-studio] disabling suspend/sleep (RK3588 BSP resume is unreliable)"
+for t in sleep suspend hibernate hybrid-sleep; do
+    ln -sf /dev/null "/etc/systemd/system/${t}.target"
+done
+
+echo "I: [pi-studio] GNOME power defaults: never auto-suspend (system-wide dconf)"
+install -d /etc/dconf/profile /etc/dconf/db/local.d
+cat > /etc/dconf/profile/user <<'EOF'
+user-db:user
+system-db:local
+EOF
+cat > /etc/dconf/db/local.d/00-pi-studio-power <<'EOF'
+[org/gnome/settings-daemon/plugins/power]
+sleep-inactive-ac-type='nothing'
+sleep-inactive-battery-type='nothing'
+EOF
+dconf update || true
+
+echo "I: [pi-studio] suspend disabled"

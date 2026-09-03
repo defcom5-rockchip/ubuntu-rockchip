@@ -1,0 +1,97 @@
+#!/bin/sh
+#
+# 68-first-boot-hygiene.hook.chroot
+#
+# ALL FLAVORS — no FLAVOR gate. Studio, Desktop and (when it lands) NNP all want
+# this. A headless server wants it MORE than a desktop does.
+#
+# Two unrelated first-boot annoyances, both reported by Pi Claude against the
+# Pi Desktop v1.0 cold-boot proof (2026-08-01):
+#
+# 1. THE IO STORM. On the very first boot tracker-miner-fs-3, packagekitd and
+#    unattended-upgrades all start working at once. Video playback stutters for
+#    2-3 minutes and the desktop feels heavy. Decode holds through it — this is
+#    IO pressure, not a graphics fault — but it's the user's first impression of
+#    the product, on the boot where they're deciding what they think of it.
+#
+# 2. A FAILED UNIT. casper-md5check.service reports failed in `systemctl --failed`
+#    — a live-media checksum leftover with no job on an installed system. Harmless,
+#    and it looks like something is broken to anyone who checks.
+#
+# ⚠️ DO NOT mask oem-config.service here. It is NOT a leftover on FIRST boot — it
+#    is the OEM setup step that CREATES the user account (pre-seeded pi-studio).
+#    Masking it strands first boot at oem-config.target with no user (login
+#    rejected, no desktop) — cost a bake + a card-recovery on 2026-08-14. It only
+#    *looks* like a leftover AFTER setup has completed (which is where it was seen
+#    failing on the already-configured Pi Desktop). Leave it alone.
+#
+# SCOPE — deliberately narrow:
+#   * tracker is DELAYED and slowed, not disabled. It powers GNOME search; killing
+#     it to fix a 3-minute annoyance is a bad trade, and the user can undo these
+#     two keys with gsettings.
+#   * unattended-upgrades is LEFT ALONE ON PURPOSE. It is the thing that ships
+#     security updates. Trading that for a quieter first boot would be wrong, and
+#     it isn't ours to decide for the user.
+#   * packagekitd is D-Bus activated by GNOME Software's update check and settles
+#     on its own once the first check completes. Not worth fighting.
+
+set -e
+
+echo "I: [first-boot-hygiene] masking Ubuntu live/OEM installer leftovers"
+
+# `systemctl mask` symlinks the unit to /dev/null and works whether or not the
+# unit exists — which matters here, because the server/NNP flavor won't have
+# them and we want one hook, not a flavor-gated pair.
+for u in casper-md5check.service; do
+    ln -sf /dev/null "/etc/systemd/system/$u"
+    echo "I: [first-boot-hygiene]   masked $u"
+done
+
+# --- tracker: delay + slow the first-boot indexing storm --------------------
+# Applied as a GSettings override rather than a per-user dconf write, so it
+# covers every account including ones created after imaging.
+#
+# GUARD: an override naming a schema that isn't installed makes
+# glib-compile-schemas FAIL, which would break the bake on any flavor without
+# tracker (i.e. NNP). Only write it if the schema is actually present. Both keys
+# below were verified against the real schema before this was written —
+# initial-sleep and throttle both exist in Tracker3.Miner.Files.
+TRACKER_SCHEMA=/usr/share/glib-2.0/schemas/org.freedesktop.Tracker3.Miner.Files.gschema.xml
+OVERRIDE=/usr/share/glib-2.0/schemas/90-pi-studio-tracker.gschema.override
+
+if [ -f "$TRACKER_SCHEMA" ]; then
+    cat > "$OVERRIDE" <<'EOF'
+# Pi Studio / Pi Desktop — keep first-boot calm.
+# initial-sleep: seconds to wait after login before indexing starts (default 15).
+# throttle:      0-20, higher is slower/gentler on IO (default 0).
+# Undo with:  gsettings reset org.freedesktop.Tracker3.Miner.Files initial-sleep
+[org.freedesktop.Tracker3.Miner.Files]
+initial-sleep=900
+throttle=5
+EOF
+    glib-compile-schemas /usr/share/glib-2.0/schemas/
+    echo "I: [first-boot-hygiene] tracker delayed 900s, throttle 5 (search still works)"
+else
+    echo "I: [first-boot-hygiene] no tracker schema (headless flavor) — skipping indexer throttle"
+fi
+
+# --- verification: fail the bake if any of it didn't take -------------------
+# House rule, learned the expensive way: assert the END STATE, not the config
+# that was supposed to produce it. Three bakes shipped wrong this week because
+# something "looked configured" and wasn't in effect.
+for u in casper-md5check.service; do
+    [ "$(readlink -f "/etc/systemd/system/$u")" = "/dev/null" ] || {
+        echo "E: [first-boot-hygiene] $u is not masked" >&2; exit 1; }
+done
+
+if [ -f "$TRACKER_SCHEMA" ]; then
+    [ -s "$OVERRIDE" ] || { echo "E: [first-boot-hygiene] tracker override missing" >&2; exit 1; }
+    # Compiled binary must actually carry the new value, not just the source file.
+    # Force the memory backend: in the build chroot there's no dconf/D-Bus, and a
+    # bare `gsettings get` can error on backend init; memory backend has no stored
+    # values so it returns the schema default (our 900) with no runtime deps.
+    GSETTINGS_BACKEND=memory gsettings get org.freedesktop.Tracker3.Miner.Files initial-sleep 2>/dev/null | grep -q '900' || {
+        echo "E: [first-boot-hygiene] tracker override did not compile into gschemas.compiled" >&2; exit 1; }
+fi
+
+echo "I: [first-boot-hygiene] verified: installer units masked, indexer throttled"

@@ -1,0 +1,91 @@
+#!/bin/sh
+#
+# 67-pi-studio-extensions.hook.chroot
+#
+# Pi Studio "Extensions" dock control — replaces the auto extension-update popup
+# with a MANUAL dock button: opens a terminal (asks for your password) where you
+# list / enable / disable / update GNOME extensions on YOUR terms. Same pattern as
+# the Software Update button. Desktop only, arm64 chroot. No personal info.
+#
+# NOTE: the "remove the popup" half (disabling the GNOME "Extension updates
+# available" notification) is left to verify on hardware — which exact popup it is
+# varies, and killing the wrong thing can disable extensions. Pi Claude: confirm
+# the popup on the Pi and it's a 1-liner to suppress precisely (see TODO below).
+
+set -e
+
+# FLAVOR GATE: GUI flavours only. An ALLOWLIST on purpose — a new flavour
+# defaults to NOT getting desktop payload, which fails safe. Under the old
+# ungated form this hook would have installed a browser/GUI stack onto the
+# headless NNP server image.
+PI_FLAVOR=studio; [ -r /tmp/pi-studio/FLAVOR ] && PI_FLAVOR=$(tr -d "[:space:]" < /tmp/pi-studio/FLAVOR) || true; [ -n "$PI_FLAVOR" ] || PI_FLAVOR=studio
+case "$PI_FLAVOR" in
+  studio|desktop) ;;
+  *) echo "I: [flavor] $PI_FLAVOR build - skipping GUI-only hook"; exit 0 ;;
+esac
+
+echo "I: [pi-studio-extensions] terminal extensions control + dock button"
+
+# the control panel that runs inside the terminal
+cat > /usr/local/bin/pi-studio-extensions <<'EOF'
+#!/bin/bash
+echo
+echo "  ╔════════════════════════════════════════════╗"
+echo "  ║     Pi Studio  —  GNOME Extensions          ║"
+echo "  ╚════════════════════════════════════════════╝"
+echo "  Manage what runs in your shell. You decide. (Kernel untouched.)"
+echo
+echo "  Installed:"; gnome-extensions list 2>/dev/null | sed 's/^/   • /'
+echo
+echo "  Enabled:";   gnome-extensions list --enabled 2>/dev/null | sed 's/^/   ✓ /'
+echo
+echo "  Use:  gnome-extensions enable|disable|info <uuid>"
+echo "        (system-wide changes use sudo — password cached below)"
+echo
+sudo -v 2>/dev/null || true     # pre-auth so system-wide ops are ready
+exec bash
+EOF
+chmod 0755 /usr/local/bin/pi-studio-extensions
+
+# terminal-agnostic launcher (matches pi-studio-update-launch)
+cat > /usr/local/bin/pi-studio-extensions-launch <<'EOF'
+#!/bin/bash
+X=/usr/local/bin/pi-studio-extensions
+if   command -v gnome-terminal      >/dev/null 2>&1; then exec gnome-terminal --title="Pi Studio — Extensions" -- "$X"
+elif command -v ptyxis              >/dev/null 2>&1; then exec ptyxis -- "$X"
+elif command -v kgx                 >/dev/null 2>&1; then exec kgx -- "$X"
+elif command -v x-terminal-emulator >/dev/null 2>&1; then exec x-terminal-emulator -e "$X"
+else exec xterm -e "$X"; fi
+EOF
+chmod 0755 /usr/local/bin/pi-studio-extensions-launch
+
+cat > /usr/share/applications/pi-studio-extensions.desktop <<'EOF'
+[Desktop Entry]
+Version=1.0
+Type=Application
+Name=Extensions
+GenericName=GNOME Extensions
+Comment=Manage GNOME Shell extensions — on your terms
+Icon=application-x-addon
+Exec=/usr/local/bin/pi-studio-extensions-launch
+Terminal=false
+Categories=System;Settings;
+Keywords=extensions;gnome;shell;tweaks;
+StartupNotify=true
+EOF
+
+# add to the dock favorites without clobbering a curated list (mirror Pi Claude's logic)
+BTN="'pi-studio-extensions.desktop'"
+EXIST=$(grep -rl 'favorite-apps' /usr/share/glib-2.0/schemas/*.override 2>/dev/null | head -1)
+if [ -n "$EXIST" ]; then
+  grep -q 'pi-studio-extensions.desktop' "$EXIST" || sed -i "s/\(favorite-apps=\[\)/\1${BTN}, /" "$EXIST"
+fi
+glib-compile-schemas /usr/share/glib-2.0/schemas/ 2>/dev/null || true
+update-desktop-database /usr/share/applications 2>/dev/null || true
+
+# TODO (verify on hardware): suppress the GNOME "Extension updates available" popup
+#   once Pi Claude IDs it. Likely a dconf default for new users, e.g. (UNCONFIRMED):
+#   org.gnome.shell  disable-extension-version-validation=true  (NOT the update nag)
+#   or, if it's Extension-Manager's own update check, disable that. Target precisely.
+
+echo "I: [pi-studio-extensions] done — dock button armed; popup-suppress pending hardware ID"
