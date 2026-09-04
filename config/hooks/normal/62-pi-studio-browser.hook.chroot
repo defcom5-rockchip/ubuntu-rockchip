@@ -167,12 +167,35 @@ mkdir -p /etc/skel/.config
 # Firefox is the default browser: it's the ONLY browser clean on all flicker
 # heads (no ANGLE -> no head #3 thumbnail flicker) and it HW-decodes via VA-API
 # (hook 63). Chrome/Chromium remain installed as secondaries.
+# Video opens in mpv 0.38, not VLC: mpv is the player that actually gets
+# hardware decode on this stack (VA-API via rockchip-vaapi-driver — H.264,
+# HEVC and VP9, including B-frame streams). VLC 3's VA-API interop is X11-era
+# and software-decodes here — correct picture, but CPU-bound at 4K. VLC stays
+# installed as the everything-plays fallback (right-click → Open With).
 cat > /etc/skel/.config/mimeapps.list <<'EOF'
 [Default Applications]
 x-scheme-handler/http=firefox.desktop
 x-scheme-handler/https=firefox.desktop
 text/html=firefox.desktop
 x-scheme-handler/mailto=betterbird.desktop
+video/mp4=mpv.desktop
+video/x-matroska=mpv.desktop
+application/x-matroska=mpv.desktop
+video/webm=mpv.desktop
+video/quicktime=mpv.desktop
+video/x-msvideo=mpv.desktop
+video/avi=mpv.desktop
+video/x-avi=mpv.desktop
+video/mpeg=mpv.desktop
+video/mp2t=mpv.desktop
+video/x-m4v=mpv.desktop
+video/divx=mpv.desktop
+video/vnd.divx=mpv.desktop
+video/x-flv=mpv.desktop
+video/ogg=mpv.desktop
+video/3gpp=mpv.desktop
+video/x-ms-wmv=mpv.desktop
+video/x-ms-asf=mpv.desktop
 EOF
 
 echo "I: [pi-studio-browser] done — snap-free; Firefox default, Chromium secondary (rkmpp), betterbird mail"
