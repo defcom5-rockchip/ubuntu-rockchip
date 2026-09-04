@@ -24,3 +24,26 @@ carry their reasoning in comments — read the comment before changing the code.
 6. **Every image is swept before ship:** boot journal diffed against the
    steady-state baseline (BOOT-SWEEP files on the team share), two boots,
    hardware checks per the release's changes. Ship is a human decision.
+
+## Media stack decisions (2026-09-04) — the reasoning, so it isn't re-litigated
+- **mpv 0.38 is the default video player**, not VLC. mpv is the client that
+  hardware-decodes through the rockchip VA-API driver (H.264 including B-frame
+  streams, HEVC 8-bit and Main10, VP9). VLC 3's VA-API interop is X11-era and
+  software-decodes under XWayland here — correct picture, CPU-bound at 4K. VLC
+  stays installed as the plays-everything fallback. Set via `mimeapps.list` in
+  hook 62.
+- **One mpv on the image.** apt's 0.36 is not installed; `defcom5-mpv038`
+  provides `/usr/local/bin/mpv`. The deb is installed by an explicit line in
+  hook 64 with a version glob — the `debs/` manifest installs nothing by itself.
+- **`hwdec=auto-copy`, never plain `auto`.** With `auto`, mpv picks its own
+  built-in rkmpp decoder for 10-bit content, bypasses the VA-API driver, and
+  hands panfork a surface it cannot sample — solid blue picture.
+- **10-bit guard in skel `mpv.conf`.** panfork advertises 16-bit GL textures it
+  cannot render; the conditional profile converts 10-bit to 8-bit before upload
+  (the panel is 8-bit — no visible loss). Remove it only when the GPU stack
+  moves past panfork.
+- **Firefox is the default browser and gets `media.hevc.enabled`** in its
+  enterprise policies — HEVC hardware decode is gated behind that pref on Linux
+  and defaults off. Firefox is both flicker-free and HEVC-capable here; Chrome
+  would have to give up its flicker fix to hardware-decode, so it stays scoped
+  to DRM streaming.
