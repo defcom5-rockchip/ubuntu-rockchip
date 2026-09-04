@@ -172,6 +172,7 @@ cat > /etc/firefox/policies/policies.json <<'EOF'
       "media.ffmpeg.vaapi.enabled": { "Value": true, "Status": "default" },
       "media.hardware-video-decoding.enabled": { "Value": true, "Status": "default" },
       "media.hardware-video-decoding.force-enabled": { "Value": true, "Status": "default" },
+      "media.hevc.enabled": { "Value": true, "Status": "default" },
       "media.rdd-ffmpeg.enabled": { "Value": true, "Status": "default" }
     }
   }
