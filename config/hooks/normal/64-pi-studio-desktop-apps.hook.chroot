@@ -47,8 +47,8 @@ apt-get purge -y whoopsie apport ubuntu-report popularity-contest 2>/dev/null ||
 printf 'APT::Periodic::Update-Package-Lists "0";\nAPT::Periodic::Unattended-Upgrade "0";\n' \
     > /etc/apt/apt.conf.d/20auto-upgrades
 
-echo "I: [pi-desktop] core apps: VLC (dock) + mpv (engine) + LibreOffice + monitoring"
-apt-get install -y --no-install-recommends vlc mpv btop gnome-system-monitor zram-tools
+echo "I: [pi-desktop] core apps: VLC (dock) + mpv 0.38 (engine, /opt) + LibreOffice + monitoring"
+apt-get install -y --no-install-recommends vlc btop gnome-system-monitor zram-tools
 
 # Pro Updates (Operation Facehugger): free security fixes without Ubuntu Pro.
 # Installer bundle staged in the vendor payload; it installs CLI+GUI+launcher
@@ -64,8 +64,22 @@ fi
 # mpv 0.38: hardware decode by default for every new user (VAAPI via our driver).
 install -d /etc/skel/.config/mpv
 cat > /etc/skel/.config/mpv/mpv.conf <<'EOF'
-# Pi-Desktop default: hardware video decode via VA-API (rockchip-vaapi-driver).
-hwdec=auto
+# Pi-Desktop default: hardware video decode, copy-back.
+# NOT plain "auto": on 10-bit files mpv then picks its own built-in rkmpp
+# hwdec, which talks to librockchip_mpp directly, bypasses the VA-API driver
+# entirely, and hands panfork a drm_prime surface it cannot sample -> solid
+# blue picture (hardware-verified 2026-09-04). "auto-copy" reads frames back
+# to CPU and renders correctly at every bit depth.
+hwdec=auto-copy
+# panfork (Mesa 23) advertises 16-bit GL textures it cannot render: any 10-bit
+# frame uploaded at 16bpc shows as a solid blue field (hardware-verified,
+# 2026-09-03). Convert 10-bit content to 8-bit before upload — the panel is
+# 8-bit, so no visible loss; 8-bit files keep the untouched hardware path.
+# Remove this guard when the GPU stack moves past panfork (Panthor/Mesa 25+).
+[tenbit-panfork-guard]
+profile-cond=(p["video-params/pixelformat"] or ""):find("10", 1, true) ~= nil
+profile-restore=copy
+vf=format=yuv420p
 EOF
 echo "I: [pi-desktop] skel mpv.conf written (hwdec=auto)"
 
@@ -80,9 +94,10 @@ echo "I: [pi-desktop] udev rule: construct-root hidden from file manager"
 # Custom vendor debs (the debs/ manifest is bookkeeping only — nothing installs
 # it generically; each deb is installed EXPLICITLY here, house pattern).
 VDEBS=/tmp/pi-studio/pi-studio-image/debs
-if [ -f "$VDEBS/defcom5-mpv038_0.38.0_arm64.deb" ]; then
-  apt-get install -y "$VDEBS/defcom5-mpv038_0.38.0_arm64.deb" \
-    && echo "I: [pi-desktop] mpv 0.38 engine installed (/opt/mpv038, Wayland DnD)" \
+MPVDEB=$(ls "$VDEBS"/defcom5-mpv038_*_arm64.deb 2>/dev/null | sort -V | tail -1)
+if [ -n "$MPVDEB" ]; then
+  apt-get install -y "$MPVDEB" \
+    && echo "I: [pi-desktop] mpv 0.38 installed (the ONLY mpv; /opt/mpv038 + /usr/local/bin/mpv)" \
     || echo "W: [pi-desktop] mpv038 deb install failed"
 else
   echo "W: [pi-desktop] mpv038 deb missing from vendor"
