@@ -306,7 +306,14 @@ fi
 #  2. the PPA's mpv 0.36 rode back in beside defcom5-mpv038 (a stale manifest line;
 #     removed there too) — the image must ship ONE mpv.
 # Re-apply from the hook's own text so the version string has a single source.
-if [ "${_flavor}" = desktop ]; then
+# The /tmp marker does not survive live-build's cleanup into the tarball (flavor
+# reads "studio" here even for Pi Desktop builds), so detect Pi Desktop by what
+# hook 64 leaves in /etc: its release file (new) or its udev rule (2.0.1+).
+_is_pidesktop=no
+if [ "${_flavor}" = desktop ] || [ -f "${chroot_dir}/etc/pi-desktop-release" ] \
+   || [ -f "${chroot_dir}/etc/udev/rules.d/99-pi-desktop-hide-altroot.rules" ]; then _is_pidesktop=yes; fi
+echo "I: config-image: pi-desktop=${_is_pidesktop} (marker flavor=${_flavor})"
+if [ "${_is_pidesktop}" = yes ]; then
     _pn=$(grep -ohE 'PRETTY_NAME="Pi-Desktop [^"]*"' ../config/hooks/normal/64-*.hook.chroot 2>/dev/null | head -1)
     if [ -n "${_pn}" ]; then
         sed -i "s|^PRETTY_NAME=.*|${_pn}|" "${chroot_dir}/usr/lib/os-release"

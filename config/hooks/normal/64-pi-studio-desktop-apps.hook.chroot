@@ -194,6 +194,9 @@ sed -i 's/127\.0\.1\.1.*/127.0.1.1\tpidesktop/' /etc/hosts || true
 # VOP2 layer_sel flicker fix, cma=512M, and the VA-API Chrome+Firefox stack close it out.
 sed -i 's|^PRETTY_NAME=.*|PRETTY_NAME="Pi-Desktop 2.0.2 — Ubuntu 24.04 LTS"|' /usr/lib/os-release
 grep -q 'Pi-Desktop 2.0.2' /usr/lib/os-release || { echo "E: [pi-desktop] PRETTY_NAME not applied" >&2; exit 1; }
+# Persistent marker for the image stage (the /tmp vendor marker does not survive
+# into the tarball): config-image.sh re-applies PRETTY_NAME etc. when this exists.
+echo "2.0.2" > /etc/pi-desktop-release
 # fastfetch: vendored arm64 deb (not in noble repos) + skel config with the SoC temp
 # line (sysfs thermal zone — the zero-debt instrumentation answer; no extensions).
 if [ -f "$V/fastfetch_arm64.deb" ]; then
