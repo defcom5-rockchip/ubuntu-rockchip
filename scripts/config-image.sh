@@ -340,6 +340,10 @@ if [ "${_is_pidesktop}" = yes ]; then
         fi
         chroot ${chroot_dir} apt-get install -y ffmpeg >/dev/null 2>&1 && chroot ${chroot_dir} apt-mark manual ffmpeg >/dev/null 2>&1 \
             && echo "I: config-image: ffmpeg present and manual" || echo "W: config-image: ffmpeg install/mark failed"
+        # Belt and braces (ldd under qemu resolved only 2 packages in the image-4 run): the
+        # names the image-3 autoremove actually took, marked manual explicitly when installed.
+        _explicit=$(chroot ${chroot_dir} sh -c 'for p in libxss1 libxpresent1 libplacebo338 libavfilter9 libavdevice60 libavcodec60 libavformat60 libavutil58 libswscale7 libswresample4 libpostproc57 libass9 libbluray2 libjack-jackd2-0 librubberband2 libsixel1 libuchardet0 libzimg2 liblcms2-2 libarchive13t64 libsdl2-2.0-0; do dpkg-query -W -f="\${Status}" $p 2>/dev/null | grep -q "install ok installed" && printf "%s " $p; done')
+        [ -n "${_explicit}" ] && chroot ${chroot_dir} apt-mark manual ${_explicit} >/dev/null 2>&1 && echo "I: config-image: explicit mpv038 library list marked manual ($(echo ${_explicit} | wc -w) packages)"
         if chroot ${chroot_dir} dpkg-query -W -f='${Status}' mpv 2>/dev/null | grep -q "install ok installed"; then
             chroot ${chroot_dir} apt-get purge -y mpv \
                 && echo "I: config-image: stray mpv 0.36 purged (defcom5-mpv038 is the only mpv)" \

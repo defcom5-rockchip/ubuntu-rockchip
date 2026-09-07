@@ -97,6 +97,7 @@ if [ -n "$MPVDEB" ]; then
   _need=$(ldd /opt/mpv038/bin/mpv 2>/dev/null | awk '/=> \//{print $3}' | xargs -r dpkg -S 2>/dev/null | cut -d: -f1 | sort -u | tr '\n' ' ')
   [ -n "$_need" ] && apt-mark manual $_need >/dev/null 2>&1 && echo "I: [pi-desktop] mpv038 runtime libraries marked manual ($(echo $_need | wc -w))"
   apt-get install -y ffmpeg >/dev/null 2>&1 && apt-mark manual ffmpeg >/dev/null 2>&1 && echo "I: [pi-desktop] ffmpeg present and manual"
+  for p in libxss1 libxpresent1 libplacebo338 libavfilter9 libavdevice60 libavcodec60 libavformat60 libavutil58 libswscale7 libswresample4 libpostproc57 libass9 libbluray2 libjack-jackd2-0 librubberband2 libsixel1 libuchardet0 libzimg2 liblcms2-2 libarchive13t64 libsdl2-2.0-0; do dpkg -s $p >/dev/null 2>&1 && apt-mark manual $p >/dev/null 2>&1; done; echo "I: [pi-desktop] mpv038 library list marked manual (explicit)"
   dpkg -s mpv >/dev/null 2>&1 && apt-get purge -y mpv 2>/dev/null && echo "I: [pi-desktop] stray mpv 0.36 purged" || true
   # /opt is not on XDG_DATA_DIRS: publish mpv038's launcher + icons via /usr/local.
   install -d /usr/local/share/applications /usr/local/share/icons
