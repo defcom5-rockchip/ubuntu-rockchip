@@ -48,7 +48,7 @@ printf 'APT::Periodic::Update-Package-Lists "0";\nAPT::Periodic::Unattended-Upgr
     > /etc/apt/apt.conf.d/20auto-upgrades
 
 echo "I: [pi-desktop] core apps: VLC (dock) + mpv 0.38 (engine, /opt) + LibreOffice + monitoring"
-apt-get install -y --no-install-recommends vlc btop gnome-system-monitor zram-tools
+apt-get install -y --no-install-recommends vlc btop gnome-system-monitor zram-tools iw
 
 # Pro Updates (Operation Facehugger): free security fixes without Ubuntu Pro.
 # Installer bundle staged in the vendor payload; it installs CLI+GUI+launcher
