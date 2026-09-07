@@ -92,7 +92,17 @@ if [ -n "$MPVDEB" ]; then
   # Belt and braces: if anything earlier dragged the PPA's mpv 0.36 in (a stale
   # manifest line did, 2.0.2 bake #1), it goes. mpv038 Provides: mpv and ships its
   # own mpv.desktop in skel, so the default video handler survives.
+  # mpv038 declares no Depends: mark what its binary links against as manual (and keep
+  # ffmpeg) BEFORE any purge/autoremove, or the next autoremove guts the player.
+  _need=$(ldd /opt/mpv038/bin/mpv 2>/dev/null | awk '/=> \//{print $3}' | xargs -r dpkg -S 2>/dev/null | cut -d: -f1 | sort -u | tr '\n' ' ')
+  [ -n "$_need" ] && apt-mark manual $_need >/dev/null 2>&1 && echo "I: [pi-desktop] mpv038 runtime libraries marked manual ($(echo $_need | wc -w))"
+  apt-get install -y ffmpeg >/dev/null 2>&1 && apt-mark manual ffmpeg >/dev/null 2>&1 && echo "I: [pi-desktop] ffmpeg present and manual"
   dpkg -s mpv >/dev/null 2>&1 && apt-get purge -y mpv 2>/dev/null && echo "I: [pi-desktop] stray mpv 0.36 purged" || true
+  # /opt is not on XDG_DATA_DIRS: publish mpv038's launcher + icons via /usr/local.
+  install -d /usr/local/share/applications /usr/local/share/icons
+  sed 's|^Exec=mpv|Exec=/opt/mpv038/bin/mpv|' /opt/mpv038/share/applications/mpv.desktop > /usr/local/share/applications/mpv.desktop 2>/dev/null || true
+  [ -d /opt/mpv038/share/icons/hicolor ] && cp -a /opt/mpv038/share/icons/hicolor /usr/local/share/icons/ && gtk-update-icon-cache -f -q /usr/local/share/icons/hicolor 2>/dev/null || true
+  getent group video >/dev/null && id gdm >/dev/null 2>&1 && gpasswd -a gdm video >/dev/null 2>&1 || true
 else
   echo "W: [pi-desktop] mpv038 deb missing from vendor"
 fi

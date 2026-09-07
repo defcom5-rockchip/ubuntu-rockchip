@@ -323,12 +323,41 @@ if [ "${_is_pidesktop}" = yes ]; then
     else
         echo "W: config-image: no Pi-Desktop PRETTY_NAME found in hook 64 — left as is"
     fi
-    if chroot ${chroot_dir} dpkg-query -W -f='${Status}' defcom5-mpv038 2>/dev/null | grep -q "install ok installed" \
-       && chroot ${chroot_dir} dpkg-query -W -f='${Status}' mpv 2>/dev/null | grep -q "install ok installed"; then
-        chroot ${chroot_dir} apt-get purge -y mpv \
-            && echo "I: config-image: stray mpv 0.36 purged (defcom5-mpv038 is the only mpv)" \
-            || echo "W: config-image: could not purge stray mpv"
+    if chroot ${chroot_dir} dpkg-query -W -f='${Status}' defcom5-mpv038 2>/dev/null | grep -q "install ok installed"; then
+        # defcom5-mpv038 declares no Depends, so the libraries it links against are
+        # "automatic" leftovers of the Ubuntu mpv — and THIS script runs an autoremove
+        # further down (after the kernel purge). In the 2.0.2 image-3 build that took
+        # libavfilter9/libavdevice60/libplacebo338/libxss1/libxpresent1 AND ffmpeg with
+        # it, shipping a default video player that could not start. Pin every library
+        # the binary needs (from its NEEDED list, resolved through dpkg) as manual first,
+        # plus ffmpeg, which users expect as a first-class package.
+        _need=$(chroot ${chroot_dir} sh -c 'ldd /opt/mpv038/bin/mpv 2>/dev/null | awk "/=> \//{print \$3}" | xargs -r dpkg -S 2>/dev/null | cut -d: -f1 | sort -u' | tr '\n' ' ')
+        if [ -n "${_need}" ]; then
+            chroot ${chroot_dir} apt-mark manual ${_need} >/dev/null 2>&1 || true
+            echo "I: config-image: mpv038 runtime libraries marked manual ($(echo ${_need} | wc -w) packages)"
+        else
+            echo "W: config-image: could not resolve mpv038's libraries (ldd via chroot failed) — autoremove may break mpv"
+        fi
+        chroot ${chroot_dir} apt-get install -y ffmpeg >/dev/null 2>&1 && chroot ${chroot_dir} apt-mark manual ffmpeg >/dev/null 2>&1 \
+            && echo "I: config-image: ffmpeg present and manual" || echo "W: config-image: ffmpeg install/mark failed"
+        if chroot ${chroot_dir} dpkg-query -W -f='${Status}' mpv 2>/dev/null | grep -q "install ok installed"; then
+            chroot ${chroot_dir} apt-get purge -y mpv \
+                && echo "I: config-image: stray mpv 0.36 purged (defcom5-mpv038 is the only mpv)" \
+                || echo "W: config-image: could not purge stray mpv"
+        fi
+        # mpv038 lives under /opt, which is not on XDG_DATA_DIRS: once Ubuntu's mpv is gone
+        # the launcher has no icon and no system-wide .desktop. Publish them via /usr/local.
+        mkdir -p "${chroot_dir}/usr/local/share/applications" "${chroot_dir}/usr/local/share/icons"
+        [ -f "${chroot_dir}/opt/mpv038/share/applications/mpv.desktop" ] && \
+            sed 's|^Exec=mpv|Exec=/opt/mpv038/bin/mpv|' "${chroot_dir}/opt/mpv038/share/applications/mpv.desktop" > "${chroot_dir}/usr/local/share/applications/mpv.desktop"
+        [ -d "${chroot_dir}/opt/mpv038/share/icons/hicolor" ] && cp -a "${chroot_dir}/opt/mpv038/share/icons/hicolor" "${chroot_dir}/usr/local/share/icons/"
+        chroot ${chroot_dir} sh -c 'command -v gtk-update-icon-cache >/dev/null && gtk-update-icon-cache -f -q /usr/local/share/icons/hicolor 2>/dev/null; command -v update-desktop-database >/dev/null && update-desktop-database -q /usr/local/share/applications 2>/dev/null' || true
+        echo "I: config-image: mpv038 desktop file + icons published under /usr/local/share"
     fi
+    # The GDM greeter's gst-plugin-scanner probes the Rockchip GStreamer encoders as
+    # user gdm, which is not in 'video' — 4 MPP error lines at every greeter. Cosmetic;
+    # silence it (Pi Claude's boot sweep, 2.0.2).
+    chroot ${chroot_dir} sh -c 'getent group video >/dev/null && id gdm >/dev/null 2>&1 && gpasswd -a gdm video >/dev/null 2>&1' && echo "I: config-image: gdm added to video (greeter MPP noise)" || true
 fi
 echo "I: config-image: mesa gate OK — panfork stack intact, no stock mesa-libgallium"
 else
