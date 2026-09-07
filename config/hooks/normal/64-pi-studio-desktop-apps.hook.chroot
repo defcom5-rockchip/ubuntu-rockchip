@@ -89,6 +89,10 @@ if [ -n "$MPVDEB" ]; then
   apt-get install -y "$MPVDEB" \
     && echo "I: [pi-desktop] mpv 0.38 installed (the ONLY mpv; /opt/mpv038 + /usr/local/bin/mpv)" \
     || echo "W: [pi-desktop] mpv038 deb install failed"
+  # Belt and braces: if anything earlier dragged the PPA's mpv 0.36 in (a stale
+  # manifest line did, 2.0.2 bake #1), it goes. mpv038 Provides: mpv and ships its
+  # own mpv.desktop in skel, so the default video handler survives.
+  dpkg -s mpv >/dev/null 2>&1 && apt-get purge -y mpv 2>/dev/null && echo "I: [pi-desktop] stray mpv 0.36 purged" || true
 else
   echo "W: [pi-desktop] mpv038 deb missing from vendor"
 fi

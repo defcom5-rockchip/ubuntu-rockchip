@@ -298,6 +298,31 @@ if [ -n "${_mesa_bad}" ]; then
     echo "       it, so if this fires, check what re-introduced that package."
     exit 1
 fi
+
+# --- Pi Desktop late fix-ups (2026-09-07) — after EVERY apt step in this stage ------
+# Two things the image stage undid in the 2.0.2 bake, caught by verify-202.sh:
+#  1. base-files got upgraded by the board hook's dist-upgrade and rewrote
+#     /usr/lib/os-release, erasing the PRETTY_NAME hook 64 had set (and verified).
+#  2. the PPA's mpv 0.36 rode back in beside defcom5-mpv038 (a stale manifest line;
+#     removed there too) — the image must ship ONE mpv.
+# Re-apply from the hook's own text so the version string has a single source.
+if [ "${_flavor}" = desktop ]; then
+    _pn=$(grep -ohE 'PRETTY_NAME="Pi-Desktop [^"]*"' ../config/hooks/normal/64-*.hook.chroot 2>/dev/null | head -1)
+    if [ -n "${_pn}" ]; then
+        sed -i "s|^PRETTY_NAME=.*|${_pn}|" "${chroot_dir}/usr/lib/os-release"
+        grep -q 'Pi-Desktop' "${chroot_dir}/usr/lib/os-release" \
+            && echo "I: config-image: PRETTY_NAME re-applied (${_pn})" \
+            || { echo "FATAL: config-image: PRETTY_NAME re-apply failed"; exit 1; }
+    else
+        echo "W: config-image: no Pi-Desktop PRETTY_NAME found in hook 64 — left as is"
+    fi
+    if chroot ${chroot_dir} dpkg-query -W -f='${Status}' defcom5-mpv038 2>/dev/null | grep -q "install ok installed" \
+       && chroot ${chroot_dir} dpkg-query -W -f='${Status}' mpv 2>/dev/null | grep -q "install ok installed"; then
+        chroot ${chroot_dir} apt-get purge -y mpv \
+            && echo "I: config-image: stray mpv 0.36 purged (defcom5-mpv038 is the only mpv)" \
+            || echo "W: config-image: could not purge stray mpv"
+    fi
+fi
 echo "I: config-image: mesa gate OK — panfork stack intact, no stock mesa-libgallium"
 else
     echo "I: config-image: headless flavor (${_flavor}) — skipping panfork restore and mesa gate"
