@@ -23,9 +23,11 @@ PI_FLAVOR=studio; [ -r "$V/FLAVOR" ] && PI_FLAVOR=$(tr -d "[:space:]" < "$V/FLAV
 export DEBIAN_FRONTEND=noninteractive
 apt-get update
 
-echo "I: [pi-desktop] GNOME de-junk (games/cheese/maps/contacts/tour/totem out; VLC replaces totem)"
+echo "I: [pi-desktop] GNOME de-junk (games/cheese/maps/contacts/tour/totem/remmina/shotwell out; VLC replaces totem)"
 apt-get purge -y aisleriot gnome-mahjongg gnome-mines gnome-sudoku cheese \
-    gnome-maps gnome-contacts gnome-tour totem totem-plugins 2>/dev/null || true
+    gnome-maps gnome-contacts gnome-tour totem totem-plugins \
+    remmina remmina-common remmina-plugin-rdp remmina-plugin-vnc remmina-plugin-secret \
+    shotwell shotwell-common 2>/dev/null || true
 
 # ⚠️ HARD-WON LESSON (2026-07-21): do NOT purge casper here, and do NOT
 # glob-purge sssd. The /usr/sbin/update-initramfs diversion is a LOCAL diversion
@@ -48,7 +50,7 @@ printf 'APT::Periodic::Update-Package-Lists "0";\nAPT::Periodic::Unattended-Upgr
     > /etc/apt/apt.conf.d/20auto-upgrades
 
 echo "I: [pi-desktop] core apps: VLC (dock) + mpv 0.38 (engine, /opt) + LibreOffice + monitoring"
-apt-get install -y --no-install-recommends vlc btop gnome-system-monitor zram-tools iw
+apt-get install -y --no-install-recommends vlc gnome-system-monitor zram-tools iw
 
 # Pro Updates (Operation Facehugger): free security fixes without Ubuntu Pro.
 # Installer bundle staged in the vendor payload; it installs CLI+GUI+launcher
@@ -64,24 +66,12 @@ fi
 # mpv 0.38: hardware decode by default for every new user (VAAPI via our driver).
 install -d /etc/skel/.config/mpv
 cat > /etc/skel/.config/mpv/mpv.conf <<'EOF'
-# Pi-Desktop default: hardware video decode, copy-back.
-# NOT plain "auto": on 10-bit files mpv then picks its own built-in rkmpp
-# hwdec, which talks to librockchip_mpp directly, bypasses the VA-API driver
-# entirely, and hands panfork a drm_prime surface it cannot sample -> solid
-# blue picture (hardware-verified 2026-09-04). "auto-copy" reads frames back
-# to CPU and renders correctly at every bit depth.
-hwdec=auto-copy
-# panfork (Mesa 23) advertises 16-bit GL textures it cannot render: any 10-bit
-# frame uploaded at 16bpc shows as a solid blue field (hardware-verified,
-# 2026-09-03). Convert 10-bit content to 8-bit before upload — the panel is
-# 8-bit, so no visible loss; 8-bit files keep the untouched hardware path.
-# Remove this guard when the GPU stack moves past panfork (Panthor/Mesa 25+).
-[tenbit-panfork-guard]
-profile-cond=(p["video-params/pixelformat"] or ""):find("10", 1, true) ~= nil
-profile-restore=copy
-vf=format=yuv420p
+# Pi Desktop 2.0.2: zero-copy VA-API first (8- and 10-bit display correctly since
+# driver 2.1.3), copy-back as fallback. Never plain hwdec=auto: mpv would pick its own
+# rkmpp path, whose bare NV15 output the GPU stack cannot import (blue screen).
+hwdec=vaapi,vaapi-copy
 EOF
-echo "I: [pi-desktop] skel mpv.conf written (hwdec=auto)"
+echo "I: [pi-desktop] skel mpv.conf written (hwdec=vaapi,vaapi-copy; 10-bit guard profile retired)"
 
 # Hide the dormant eMMC OS partition (construct-root) from the Files sidebar —
 # a second bootable root advertised as a clickable disk is untidy on a shipped image.
@@ -107,7 +97,11 @@ if [ -f "$VDEBS/defcom5-betterbird_1.0.0_arm64.deb" ]; then
     && echo "I: [pi-desktop] betterbird installed (default mailto handler now real)" \
     || echo "W: [pi-desktop] betterbird deb install failed"
 fi
-apt-get install -y libreoffice-writer libreoffice-calc libreoffice-impress libreoffice-gtk4
+apt-get install -y libreoffice-writer libreoffice-calc libreoffice-gtk4
+# Writer + Calc only (2.0.2). Impress/Draw and the Elementary icon theme arrive as
+# recommends of the seed/gnome integration; drop them (~35 MB). Colibre must stay:
+# libreoffice-common hard-depends on it. Yaru is the theme GNOME actually uses.
+apt-get purge -y libreoffice-impress libreoffice-draw libreoffice-style-elementary 2>/dev/null || true
 # defcom5-libv4l-rkmpp: the V4L2->MPP plug-in the +rkmpp Chromium decodes through
 # (it never touches the VA-API driver). Upgrades the PPA's 2024 snapshot in place:
 # hides the 10-bit profiles Chromium must not select (the plug-in outputs NV12 only)
@@ -194,8 +188,8 @@ sed -i 's/127\.0\.1\.1.*/127.0.1.1\tpidesktop/' /etc/hosts || true
 # JR marks it as the BSP fork so the plain "Pi-Desktop" name is free for the future
 # mainline (Debian/Panthor) successor. Final = no more BSP releases after this — the
 # VOP2 layer_sel flicker fix, cma=512M, and the VA-API Chrome+Firefox stack close it out.
-sed -i 's|^PRETTY_NAME=.*|PRETTY_NAME="Pi-Desktop 2.0.1 — Ubuntu 24.04 LTS"|' /usr/lib/os-release
-grep -q 'Pi-Desktop 2.0.1' /usr/lib/os-release || { echo "E: [pi-desktop] PRETTY_NAME not applied" >&2; exit 1; }
+sed -i 's|^PRETTY_NAME=.*|PRETTY_NAME="Pi-Desktop 2.0.2 — Ubuntu 24.04 LTS"|' /usr/lib/os-release
+grep -q 'Pi-Desktop 2.0.2' /usr/lib/os-release || { echo "E: [pi-desktop] PRETTY_NAME not applied" >&2; exit 1; }
 # fastfetch: vendored arm64 deb (not in noble repos) + skel config with the SoC temp
 # line (sysfs thermal zone — the zero-debt instrumentation answer; no extensions).
 if [ -f "$V/fastfetch_arm64.deb" ]; then
