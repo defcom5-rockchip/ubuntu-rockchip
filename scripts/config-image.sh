@@ -153,6 +153,17 @@ fi
 rm -rf ${chroot_dir} && mkdir -p ${chroot_dir}
 tar -xpJf "ubuntu-${RELASE_VERSION}-preinstalled-${FLAVOR}-arm64.rootfs.tar.xz" -C ${chroot_dir}
 
+# Pi Desktop: protect the defcom5 libv4l-rkmpp fork from the 1001 PPA pins below
+# (idempotent; hook 62 writes the same file for fresh rootfs builds — this covers a
+# tarball built before that hook carried it). See hook 62 for the story.
+if [ -f "${chroot_dir}/usr/lib/aarch64-linux-gnu/libv4l/plugins/libv4l-rkmpp.so" ] && \
+   [ ! -s "${chroot_dir}/etc/apt/preferences.d/20-libv4l-rkmpp-defcom5.pref" ]; then
+    mkdir -p "${chroot_dir}/etc/apt/preferences.d"
+    printf 'Package: libv4l-rkmpp\nPin: release o=LP-PPA-jjriek-rockchip-multimedia\nPin-Priority: 100\n\nPackage: libv4l-rkmpp\nPin: release o=LP-PPA-liujianfeng1994-rockchip-multimedia\nPin-Priority: 100\n' \
+        > "${chroot_dir}/etc/apt/preferences.d/20-libv4l-rkmpp-defcom5.pref"
+    echo "I: config-image: libv4l-rkmpp pin written (keeps the defcom5 fork over the PPA snapshots)"
+fi
+
 # Mount the root filesystem
 setup_mountpoint $chroot_dir
 

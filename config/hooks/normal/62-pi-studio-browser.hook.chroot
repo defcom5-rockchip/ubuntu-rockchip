@@ -77,6 +77,13 @@ printf 'Package: mesa-libgallium\nPin: release a=*\nPin-Priority: -1\n' \
 # config-image.sh verifies the INSTALLED versions rather than trusting this.
 printf 'Package: *\nPin: release o=LP-PPA-jjriek-panfork-mesa\nPin-Priority: 1001\n' \
     >> /etc/apt/preferences.d/10-no-mesa-libgallium.pref
+# Our libv4l-rkmpp fork (hook 64) is NEWER than the PPA snapshots, but the base
+# recipe pins jjriek's rockchip-multimedia PPA at 1001 for everything — and a
+# >1000 pin permits DOWNGRADES, so the board hook's dist-upgrade tried to drag
+# it back to 1.6.0 and aborted the 2.0.2 image stage (2026-09-07). A
+# specific-form stanza (Package: <name>) takes precedence over `Package: *`.
+printf 'Package: libv4l-rkmpp\nPin: release o=LP-PPA-jjriek-rockchip-multimedia\nPin-Priority: 100\n\nPackage: libv4l-rkmpp\nPin: release o=LP-PPA-liujianfeng1994-rockchip-multimedia\nPin-Priority: 100\n' \
+    > /etc/apt/preferences.d/20-libv4l-rkmpp-defcom5.pref
 # NOTE: no purge here. At this point in the build the panfork PPA has NOT been
 # added yet (the board hook in config-image.sh does that), so apt has no version
 # to fall back to and `apt purge mesa-libgallium` dies on unmet Qt/GLES deps —
