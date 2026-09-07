@@ -188,3 +188,20 @@ else
 fi
 
 echo "I: [pi-desktop] done — BETA payload complete (apps + fixes + defaults + branding)"
+
+## 8b. WirePlumber: keep the silent analog codec out of the fallback chain ----------
+# The ES8388 analog codec is SILENT on the BSP 6.1 kernel (I2S MCLK clock-gate bug).
+# At default priority it ties with HDMI, and whenever a Bluetooth sink disconnects
+# WirePlumber can fall back to it -- the desktop goes mute for no visible reason
+# (hardware-verified 2026-09-06). Push it to the bottom so HDMI/DP win the fallback.
+# Remove once a kernel carrying the MCLK fix ships.
+mkdir -p /etc/wireplumber/main.lua.d
+cat > /etc/wireplumber/main.lua.d/51-es8388-deprioritize.lua <<'EOF'
+rule = {
+  matches = { { { "node.name", "matches", "alsa_output.platform-es8388*" } } },
+  apply_properties = { ["priority.session"] = 100, ["priority.driver"] = 100 },
+}
+table.insert(alsa_monitor.rules, rule)
+EOF
+echo "I: [pi-desktop] WirePlumber rule: ES8388 analog codec deprioritized (silent on BSP)"
+
