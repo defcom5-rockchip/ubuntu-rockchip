@@ -70,6 +70,10 @@ cat > /etc/skel/.config/mpv/mpv.conf <<'EOF'
 # driver 2.1.3), copy-back as fallback. Never plain hwdec=auto: mpv would pick its own
 # rkmpp path, whose bare NV15 output the GPU stack cannot import (blue screen).
 hwdec=vaapi,vaapi-copy
+# 4K60 on GNOME Wayland: mpv's default audio-sync mode drops ~2/3 of the frames as
+# 'late' even though decode and GPU keep up (measured 605/900 dropped on 4K60 HDR10);
+# display-resample presents every frame on a vsync: 0 dropped in the same test.
+video-sync=display-resample
 EOF
 echo "I: [pi-desktop] skel mpv.conf written (hwdec=vaapi,vaapi-copy; 10-bit guard profile retired)"
 
