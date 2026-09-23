@@ -121,8 +121,8 @@ apt-get install -y libreoffice-writer libreoffice-calc libreoffice-gtk4
 # recommends of the seed/gnome integration; drop them (~35 MB). Colibre must stay:
 # libreoffice-common hard-depends on it. Yaru is the theme GNOME actually uses.
 apt-get purge -y libreoffice-impress libreoffice-draw libreoffice-style-elementary 2>/dev/null || true
-# defcom5-libv4l-rkmpp: the V4L2->MPP plug-in the +rkmpp Chromium decodes through
-# (it never touches the VA-API driver). Upgrades the PPA's 2024 snapshot in place:
+# defcom5-libv4l-rkmpp: the V4L2->MPP plug-in (kept for any V4L2 client; since 2.0.3
+# Chromium decodes through VA-API instead). Upgrades the PPA's 2024 snapshot in place:
 # hides the 10-bit profiles Chromium must not select (the plug-in outputs NV12 only)
 # and drops the assert that killed the GPU process on any 10-bit stream.
 LV4LDEB=$(ls "$VDEBS"/libv4l-rkmpp_*defcom5*_arm64.deb 2>/dev/null | sort -V | tail -1)
@@ -133,14 +133,18 @@ if [ -n "$LV4LDEB" ]; then
 else
   echo "W: [pi-desktop] libv4l-rkmpp defcom5 deb missing from vendor"
 fi
-# Chromium: enable its hardware HEVC path (the fork above makes this safe for 10-bit).
-# Chromium keeps only the LAST --enable-features, so the PPA defaults are repeated.
-cat > /etc/chromium.d/90-pi-desktop-hevc <<'EOF'
-# Pi Desktop: let Chromium use its hardware HEVC path (libv4l-rkmpp -> MPP).
-# Chromium keeps only the LAST --enable-features, so the PPA defaults are repeated here.
-export CHROMIUM_FLAGS="$CHROMIUM_FLAGS --enable-features=AcceleratedVideoDecoder,AcceleratedVideoDecodeLinuxGL,AcceleratedVideoDecodeLinuxZeroCopyGL,PlatformHEVCDecoderSupport"
+# Chromium 153 (xtradeb, hook 62): VA-API hardware decode — the same flag set as the Chrome
+# launcher in hook 63. The render-node override matters: the kernel also registers the NPU as
+# renderD129 and Chromium's VA-API setup otherwise picks it. Measured 2026-09-22: HEVC 8-bit,
+# H.264 and 10-bit VP9 Profile 2 at 4K60 on the VPU. (Chromium keeps only the LAST
+# --enable-features, so the whole set is one argument.)
+rm -f /etc/chromium.d/90-pi-desktop-hevc
+cat > /etc/chromium.d/pidesktop-vaapi <<'EOF'
+# Pi Desktop 2.0.3: Chromium hardware video decode via VA-API (rockchip_drv_video).
+export LIBVA_DRIVER_NAME=rockchip
+export CHROMIUM_FLAGS="$CHROMIUM_FLAGS --ozone-platform=wayland --render-node-override=/dev/dri/renderD128 --enable-features=AcceleratedVideoDecoder,AcceleratedVideoDecodeLinuxGL,AcceleratedVideoDecodeLinuxZeroCopyGL,PlatformHEVCDecoderSupport"
 EOF
-echo "I: [pi-desktop] chromium.d/90-pi-desktop-hevc: PlatformHEVCDecoderSupport on"
+echo "I: [pi-desktop] chromium.d/pidesktop-vaapi: VA-API decode flags + render-node override"
 
 echo "I: [pi-desktop] chromium-sandbox (alpha shipped without -> HW-decode Chromium incomplete)"
 apt-get install -y chromium-sandbox

@@ -99,36 +99,31 @@ for sz in 16 22 24 32 48 64 128 256; do
 done
 [ -f "$VEND/chromium.png" ] && cp -f "$VEND/chromium.png" /usr/share/icons/hicolor/256x256/apps/chromium.png
 
-echo "I: [pi-studio-browser] remove jjriek chromium-browser(114), install liujianfeng chromium(132)"
+echo "I: [pi-studio-browser] remove jjriek chromium-browser(114); install Chromium 153 (xtradeb, VA-API lane)"
+# 2.0.3 (final): Chromium moves from liujianfeng's 132 (+rkmpp, V4L2 plug-in lane) to xtradeb's
+# 153 on the same VA-API lane as Chrome and Firefox — one decode path, 21 releases newer.
+# Measured 2026-09-22 on this stack: HEVC 8-bit and 10-bit VP9 Profile 2 (4K60) decode on the
+# VPU through rockchip_drv_video with the flag set hook 64 writes to /etc/chromium.d.
+# The liujianfeng PPA stays: hook 63 builds the VA-API driver against its librockchip-mpp-dev.
 apt-get purge -y chromium-browser chromium-browser-l10n chromium-codecs-ffmpeg-extra 2>/dev/null || true
-# liujianfeng PPA via signed-by keyring (NOT add-apt-repository — it shells out
-# to the deprecated apt-key, which can't write /tmp in this chroot). Key vendored.
 install -d /etc/apt/keyrings
 if [ -f "$VEND/liujianfeng-rockchip-multimedia.gpg" ]; then
   install -m644 "$VEND/liujianfeng-rockchip-multimedia.gpg" /etc/apt/keyrings/liujianfeng-rockchip-multimedia.gpg
   echo "deb [signed-by=/etc/apt/keyrings/liujianfeng-rockchip-multimedia.gpg] https://ppa.launchpadcontent.net/liujianfeng1994/rockchip-multimedia/ubuntu noble main" > /etc/apt/sources.list.d/liujianfeng-rockchip-multimedia.list
-  apt-get update || echo "WARN: [pi-studio-browser] apt update reported errors (continuing)"
-  apt-get install -y --no-install-recommends chromium || echo "WARN: [pi-studio-browser] chromium 132 install failed (continuing)"
-  # ── HARDWARE VIDEO DECODE (added 2026-07-30) ────────────────────────────────
-  # Chromium alone is NOT enough. The rkmpp Chromium ships the decode *flags*, but
-  # the machinery lives in a package it neither Depends nor Recommends:
-  # `libv4l-rkmpp` — "a rockchip-mpp V4L2 wrapper plugin for chromium video dec and
-  # enc". Without it Chromium silently SOFTWARE-decodes: /dev/mpp_service stays idle
-  # while one core pegs at ~100% on a 4K YouTube stream (measured on hardware —
-  # TEST-RESULTS-emmc-4k-crash-repro.md). Every image up to and including v1.4
-  # shipped this way.
-  # NOTE for future archaeology: this stack is V4L2-over-MPP. There is NO VA-API —
-  # the PPA publishes no libva or VA driver at all — so `vainfo` finding nothing is
-  # expected and is NOT the bug. Don't go down that road.
-  apt-get install -y libv4l-rkmpp rockchip-multimedia-config \
-    || echo "WARN: [pi-studio-browser] rkmpp decode plugin install failed (continuing)"
-  if dpkg -s libv4l-rkmpp >/dev/null 2>&1; then
-    echo "I: [pi-studio-browser] rkmpp V4L2 decode plugin in: $(dpkg -L libv4l-rkmpp | grep -m1 '\.so' || echo 'installed')"
-  else
-    echo "W: [pi-studio-browser] libv4l-rkmpp NOT installed — Chromium will software-decode video" >&2
-  fi
 else
-  echo "WARN: [pi-studio-browser] no vendored liujianfeng key at $VEND — skipping chromium 132"
+  echo "WARN: [pi-studio-browser] no vendored liujianfeng key at $VEND — MPP dev packages for the VA-API driver build will be missing"
+fi
+apt-get install -y --no-install-recommends software-properties-common >/dev/null 2>&1 || true
+if add-apt-repository -y ppa:xtradeb/apps; then
+  # pin Chromium to xtradeb: the liujianfeng PPA also publishes a 'chromium' (132+rkmpp)
+  printf 'Package: chromium chromium-*\nPin: release o=LP-PPA-xtradeb-apps\nPin-Priority: 1001\n' \
+    > /etc/apt/preferences.d/25-chromium-xtradeb.pref
+  apt-get update || echo "WARN: [pi-studio-browser] apt update reported errors (continuing)"
+  apt-get install -y --no-install-recommends chromium chromium-sandbox \
+    || echo "WARN: [pi-studio-browser] chromium 153 (xtradeb) install failed (continuing)"
+  dpkg -s chromium >/dev/null 2>&1 && echo "I: [pi-studio-browser] chromium $(dpkg-query -W -f='${Version}' chromium) installed"
+else
+  echo "WARN: [pi-studio-browser] xtradeb PPA add failed — no Chromium in this image"
 fi
 # if the package still left no icon, fall back to the vendored one
 [ -f /usr/share/icons/hicolor/256x256/apps/chromium.png ] || \

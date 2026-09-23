@@ -78,13 +78,21 @@ if wget -qO /tmp/google-chrome.deb \
   install -d /etc/skel/.local/bin
   cat > /etc/skel/.local/bin/google-chrome-hw <<'EOF'
 #!/bin/bash
-# Chrome's 2.0.0 role = DRM/streaming (it self-bundles Google's arm64 Widevine;
-# we never redistribute the CDM). --disable-gpu-compositing kills the ANGLE
-# UI flicker; the HW-decode loss is irrelevant here because Widevine L3 caps
-# DRM streams at ~720p, which software-decodes trivially. Netflix verified.
-# Firefox (default) owns hardware video decode.
+# Pi Desktop 2.0.3: Google Chrome (arm64, 153+) with hardware video decode.
+# Measured 2026-09-22 on this stack (kernel 1027 + panfork): HEVC 8-bit, H.264 and
+# 10-bit VP9 Profile 2 at 4K60 all decode on the VPU through our VA-API driver
+# (55-60 decoder IRQ/s, CPU mostly idle). Two things make it work:
+#  - the render-node override: the kernel also registers the NPU as renderD129 and
+#    Chrome's VA-API setup otherwise picks it ("Preferred drm_render_node not found");
+#  - GPU compositing ON (the old --disable-gpu-compositing silently disabled decode
+#    too). The typing flicker that flag hid is fixed by hook 65 (mutter composites
+#    browser surfaces); the remaining image-thumbnail flicker is ANGLE on panfork.
+# Chrome also self-bundles Google's Widevine (we never redistribute the CDM).
+export LIBVA_DRIVER_NAME=rockchip
 exec /usr/bin/google-chrome-stable \
-  --ozone-platform=wayland --disable-gpu-compositing "$@"
+  --ozone-platform=wayland --render-node-override=/dev/dri/renderD128 \
+  --enable-features=AcceleratedVideoDecoder,AcceleratedVideoDecodeLinuxGL,AcceleratedVideoDecodeLinuxZeroCopyGL,PlatformHEVCDecoderSupport \
+  "$@"
 EOF
   chmod +x /etc/skel/.local/bin/google-chrome-hw
   # user launcher overriding the system one to use the wrapper — written clean
@@ -95,7 +103,7 @@ EOF
 Version=1.0
 Name=Google Chrome
 GenericName=Web Browser
-Comment=Streaming & DRM browser (Widevine); Firefox is the daily default
+Comment=Google Chrome with hardware video decode (VA-API); Firefox is the default browser
 Exec=sh -c "$HOME/.local/bin/google-chrome-hw %U" _
 StartupNotify=true
 Terminal=false
@@ -116,7 +124,7 @@ EOF
   # the user override; Chrome package updates may rewrite this — the user-level
   # override above is the durable layer).
   if [ -f /usr/share/applications/google-chrome.desktop ]; then
-    sed -i 's|^Exec=/usr/bin/google-chrome-stable|Exec=/usr/bin/google-chrome-stable --ozone-platform=wayland --disable-gpu-compositing|' \
+    sed -i 's|^Exec=/usr/bin/google-chrome-stable|Exec=/usr/bin/google-chrome-stable --ozone-platform=wayland --render-node-override=/dev/dri/renderD128 --enable-features=AcceleratedVideoDecoder,AcceleratedVideoDecodeLinuxGL,AcceleratedVideoDecodeLinuxZeroCopyGL,PlatformHEVCDecoderSupport|' \
       /usr/share/applications/google-chrome.desktop
   fi
 else
@@ -201,4 +209,4 @@ fi
   sed -i '/disable-gpu-compositing/d; /4K@120.*flicker/d' \
       /usr/local/share/pi-studio/Pi-Studio-HowTo.txt 2>/dev/null || true
 
-echo "I: [vaapi] done — Chrome (google-chrome-hw) + Firefox, VA-API HW decode; flicker fixed in-kernel"
+echo "I: [vaapi] done — Chrome (google-chrome-hw, GPU compositing + VA-API) + Firefox, VA-API HW decode"
