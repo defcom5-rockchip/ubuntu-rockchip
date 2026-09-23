@@ -78,22 +78,29 @@ if wget -qO /tmp/google-chrome.deb \
   install -d /etc/skel/.local/bin
   cat > /etc/skel/.local/bin/google-chrome-hw <<'EOF'
 #!/bin/bash
-# Pi Desktop 2.0.3: Google Chrome (arm64, 153+) with hardware video decode.
-# Measured 2026-09-22 on this stack (kernel 1027 + panfork): HEVC 8-bit, H.264 and
-# 10-bit VP9 Profile 2 at 4K60 all decode on the VPU through our VA-API driver
-# (55-60 decoder IRQ/s, CPU mostly idle). Two things make it work:
-#  - the render-node override: the kernel also registers the NPU as renderD129 and
-#    Chrome's VA-API setup otherwise picks it ("Preferred drm_render_node not found");
-#  - GPU compositing ON (the old --disable-gpu-compositing silently disabled decode
-#    too). The typing flicker that flag hid is fixed by hook 65 (mutter composites
-#    browser surfaces); the remaining image-thumbnail flicker is ANGLE on panfork.
-# Chrome also self-bundles Google's Widevine (we never redistribute the CDM).
+# Pi Desktop 2.0.3 — Google Chrome, DEFAULT launcher: flicker-free.
+# On this GPU stack (panfork Mesa 23) Chrome's ANGLE compositor mis-presents partial
+# updates on image-heavy pages. --disable-gpu-compositing removes that completely, at
+# the price of Chrome's hardware video decoder (it needs GPU compositing). Firefox, the
+# default browser, decodes video in hardware without the flicker. For hardware video in
+# Chrome use the second launcher, google-chrome-video ("Google Chrome (Hardware Video)").
+exec /usr/bin/google-chrome-stable \
+  --ozone-platform=wayland --disable-gpu-compositing "$@"
+EOF
+  cat > /etc/skel/.local/bin/google-chrome-video <<'EOF'
+#!/bin/bash
+# Pi Desktop 2.0.3 — Google Chrome (Hardware Video): GPU compositing on + VA-API decode.
+# Measured 2026-09-22 on this stack: HEVC 8-bit, H.264 and 10-bit VP9 Profile 2 at 4K60
+# decode on the VPU (55-60 decoder IRQ/s, CPU mostly idle). The render-node override is
+# required: the kernel also registers the NPU as renderD129 and Chrome picks it otherwise.
+# Cost: the image-thumbnail flicker (ANGLE on panfork) is visible on busy pages.
 export LIBVA_DRIVER_NAME=rockchip
 exec /usr/bin/google-chrome-stable \
   --ozone-platform=wayland --render-node-override=/dev/dri/renderD128 \
   --enable-features=AcceleratedVideoDecoder,AcceleratedVideoDecodeLinuxGL,AcceleratedVideoDecodeLinuxZeroCopyGL,PlatformHEVCDecoderSupport \
   "$@"
 EOF
+  chmod +x /etc/skel/.local/bin/google-chrome-video
   chmod +x /etc/skel/.local/bin/google-chrome-hw
   # user launcher overriding the system one to use the wrapper — written clean
   # (the old sed-mangling of Google's file produced a doubled %U on the main Exec).
@@ -103,7 +110,7 @@ EOF
 Version=1.0
 Name=Google Chrome
 GenericName=Web Browser
-Comment=Google Chrome with hardware video decode (VA-API); Firefox is the default browser
+Comment=Flicker-free Chrome (software compositing); Firefox is the default browser
 Exec=sh -c "$HOME/.local/bin/google-chrome-hw %U" _
 StartupNotify=true
 Terminal=false
@@ -120,11 +127,25 @@ Exec=sh -c "$HOME/.local/bin/google-chrome-hw" _
 Name=New Incognito Window
 Exec=sh -c "$HOME/.local/bin/google-chrome-hw --incognito" _
 EOF
+  cat > /etc/skel/.local/share/applications/google-chrome-video.desktop <<'EOF'
+[Desktop Entry]
+Version=1.0
+Name=Google Chrome (Hardware Video)
+GenericName=Web Browser
+Comment=Chrome with VA-API hardware video decode; may flicker on image-heavy pages
+Exec=sh -c "$HOME/.local/bin/google-chrome-video %U" _
+StartupNotify=true
+Terminal=false
+Icon=google-chrome
+Type=Application
+Categories=Network;WebBrowser;
+StartupWMClass=Google-chrome
+EOF
   # belt-and-braces: also flag the SYSTEM .desktop (covers launches that bypass
   # the user override; Chrome package updates may rewrite this — the user-level
   # override above is the durable layer).
   if [ -f /usr/share/applications/google-chrome.desktop ]; then
-    sed -i 's|^Exec=/usr/bin/google-chrome-stable|Exec=/usr/bin/google-chrome-stable --ozone-platform=wayland --render-node-override=/dev/dri/renderD128 --enable-features=AcceleratedVideoDecoder,AcceleratedVideoDecodeLinuxGL,AcceleratedVideoDecodeLinuxZeroCopyGL,PlatformHEVCDecoderSupport|' \
+    sed -i 's|^Exec=/usr/bin/google-chrome-stable|Exec=/usr/bin/google-chrome-stable --ozone-platform=wayland --disable-gpu-compositing|' \
       /usr/share/applications/google-chrome.desktop
   fi
 else
@@ -209,4 +230,4 @@ fi
   sed -i '/disable-gpu-compositing/d; /4K@120.*flicker/d' \
       /usr/local/share/pi-studio/Pi-Studio-HowTo.txt 2>/dev/null || true
 
-echo "I: [vaapi] done — Chrome (google-chrome-hw, GPU compositing + VA-API) + Firefox, VA-API HW decode"
+echo "I: [vaapi] done — Chrome (flicker-free default + Hardware Video launcher) + Firefox, VA-API HW decode"

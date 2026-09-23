@@ -26,8 +26,9 @@ The last Pi Desktop image built from this fork. The line continues as Pi-Desktop
 build framework (Ubuntu 26.04, GNOME 50, Armbian's drop of the Rockchip vendor kernel).
 
 ### Fixed
-- **Chrome + Chromium hardware video decode** — hook 63 Chrome launcher: GPU compositing on, `--render-node-override=/dev/dri/renderD128`
-  + VA-API feature flags (the old `--disable-gpu-compositing` also disabled decode); hook 62/64: Chromium moves from liujianfeng
+- **Chrome + Chromium hardware video decode** — hook 63: default Chrome launcher stays flicker-free (`--disable-gpu-compositing`,
+  which also disables decode); new `google-chrome-video` launcher + "Google Chrome (Hardware Video)" entry with
+  `--render-node-override=/dev/dri/renderD128` + the VA-API feature flags; hook 62/64: Chromium moves from liujianfeng
   132 (+rkmpp V4L2 lane) to xtradeb 153 with the same flags in `/etc/chromium.d/pidesktop-vaapi`. Measured on the 1027+panfork
   stack: HEVC 8-bit, H.264, VP9 Profile 2 10-bit at 4K60 on the VPU.
 - **Chromium typing/text-field flicker** — new hook `65-pi-desktop-mutter-scanout`: `MUTTER_DEBUG=disable-direct-scanout`
