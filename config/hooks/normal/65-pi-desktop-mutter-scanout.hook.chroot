@@ -1,0 +1,24 @@
+#!/bin/sh
+# 65-pi-desktop-mutter-scanout.hook.chroot — Pi Desktop 2.0.3 (final): browser flicker fix.
+#
+# The Chromium "typing / text-field" flicker on this GPU stack (panfork Mesa 23 on the
+# BSP kernel) only shows when mutter direct-scanouts the browser's buffer onto a hardware
+# plane. Compositing it instead removes that head entirely (measured on hardware
+# 2026-08-27, root cause split confirmed 2026-09-22). The thumbnail/image flicker is a
+# separate ANGLE-on-panfork issue that this does not touch — Firefox stays the default.
+#
+# gnome-shell runs as a systemd user unit (org.gnome.Shell@wayland.service), so a file in
+# /etc/environment.d reaches mutter through the environment.d generator. Cost: one extra
+# composite pass for fullscreen surfaces; no effect on video decode.
+set -e
+V=/tmp/pi-studio
+PI_FLAVOR=studio; [ -r "$V/FLAVOR" ] && PI_FLAVOR=$(tr -d "[:space:]" < "$V/FLAVOR") || true; [ -n "$PI_FLAVOR" ] || PI_FLAVOR=studio
+[ "$PI_FLAVOR" = desktop ] || { echo "I: [pi-desktop] $PI_FLAVOR build - skipping desktop-only hook"; exit 0; }
+install -d /etc/environment.d
+cat > /etc/environment.d/60-pidesktop-mutter.conf <<'CONF'
+# Pi Desktop 2.0.3: composite fullscreen/browser surfaces instead of direct scanout.
+# Cures the Chromium typing/text-field flicker on the panfork GPU stack (measured 2026-08-27).
+# Remove this file to restore mutter's default direct scanout.
+MUTTER_DEBUG=disable-direct-scanout
+CONF
+echo "I: [pi-desktop] mutter: direct scanout disabled via /etc/environment.d/60-pidesktop-mutter.conf"

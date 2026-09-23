@@ -46,4 +46,17 @@ mkdir -p /etc/systemd/system/multi-user.target.wants
 ln -sf /etc/systemd/system/regenerate-ssh-host-keys.service \
   /etc/systemd/system/multi-user.target.wants/regenerate-ssh-host-keys.service
 
+# 2.0.3 (BOOT-2): order it from the ssh side as well. Before= on our unit only bites when
+# both units are in the same transaction; socket-activated sshd on 24.04 was starting first,
+# failing on the missing keys and backing off for ~4 minutes on the very first boot.
+# Wants= + After= on ssh.service AND ssh.socket makes key generation a hard prerequisite.
+for u in ssh.service ssh.socket; do
+  mkdir -p "/etc/systemd/system/${u}.d"
+  cat > "/etc/systemd/system/${u}.d/10-pi-desktop-hostkeys-first.conf" <<'EOF'
+[Unit]
+Wants=regenerate-ssh-host-keys.service
+After=regenerate-ssh-host-keys.service
+EOF
+done
+echo "I: [pi-studio-ssh] ssh.service/ssh.socket now Wants+After regenerate-ssh-host-keys.service (BOOT-2)"
 echo "I: [pi-studio-ssh] done — host keys will regenerate uniquely on first boot"

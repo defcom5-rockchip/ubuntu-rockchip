@@ -20,6 +20,28 @@ Upstream changes from [Joshua-Riek/ubuntu-rockchip](https://github.com/Joshua-Ri
 
 ---
 
+## [2.0.3] — 2026-09-22 — Pi Desktop "Crystal Blue Persuasion" (FINAL desktop release on this base)
+
+The last Pi Desktop image built from this fork. The line continues as Pi-Desktop 3.0 on the Armbian
+build framework (Ubuntu 26.04, GNOME 50, Armbian's drop of the Rockchip vendor kernel).
+
+### Fixed
+- **Chromium typing/text-field flicker** — new hook `65-pi-desktop-mutter-scanout`: `MUTTER_DEBUG=disable-direct-scanout`
+  via `/etc/environment.d/60-pidesktop-mutter.conf` (desktop flavour only). The remaining thumbnail/image flicker is
+  ANGLE on panfork Mesa; Firefox stays the default browser.
+- **Kernel 6.1.0-1027.27, 2026-09-08 build** (fork branch `pi-desktop-4k120-cve` @ a9e0d9da): Ethernet dead after long
+  sleeps — `stmmac_resume()` reordered so phylink starts after the MAC reset (+ `phylink_prepare_resume()` backport,
+  YT8531 re-init on resume; upstreamed to Armbian rk-6.1-rkr7.2); Bluetooth SCO `sco_recv_frame()` use-after-free fix
+  re-applied (open-coded for BSP 6.1.75); RGA driver 1.3.13. Suspend targets stay masked (hook 60) — the sleep-capable
+  device tree used in the soak was not baked.
+- **First-boot ssh (BOOT-2)** — `ssh.service`/`ssh.socket` now `Wants=`+`After=` the host-key regeneration unit, so sshd
+  cannot start before the keys exist.
+- **mpv** `video-sync=display-resample` (4K60 zero-copy: 605/900 dropped frames → 0).
+- Video driver v2.1.5 (hook 63); libxpresent1/libxss1 pinned; mpv 0.38 libraries kept through autoremove.
+
+### Changed
+- `PRETTY_NAME` / `/etc/pi-desktop-release` → 2.0.3.
+
 ## [1.0.1] — 2026-06-01
 
 Security assessment and mitigation release. Addresses the notable Linux kernel
