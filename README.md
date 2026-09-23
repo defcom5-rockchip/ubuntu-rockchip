@@ -1,5 +1,13 @@
 # ubuntu-rockchip (defcom5-rockchip fork)
 
+> **Final state (2026-09-23).** No further images will be built from this fork. **Pi Desktop v2.0.2**
+> is the last published desktop image; the recipe at this commit carries the fixes found after it
+> (Chromium typing-flicker fix, hardware-video Chrome launcher, Chromium 153 on the VA-API lane,
+> first-boot ssh ordering, the 2026-09-08 kernel with the Ethernet-after-sleep and Bluetooth SCO
+> fixes) for anyone who builds it — see [CHANGELOG](./CHANGELOG.md). The desktop line continues as
+> **Pi-Desktop 3.0** on the Armbian build framework. **Pi Studio 1.3** was also built from this fork;
+> its next base is being decided.
+
 A personal fork of [Joshua-Riek/ubuntu-rockchip](https://github.com/Joshua-Riek/ubuntu-rockchip), continuing this image-builder project for Orange Pi 5B after the original was archived.
 
 > **Scope:** Orange Pi 5B only — the only hardware I own and test on.

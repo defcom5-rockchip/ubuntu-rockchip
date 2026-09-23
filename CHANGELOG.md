@@ -20,10 +20,11 @@ Upstream changes from [Joshua-Riek/ubuntu-rockchip](https://github.com/Joshua-Ri
 
 ---
 
-## [2.0.3] — 2026-09-22 — Pi Desktop "Crystal Blue Persuasion" (FINAL desktop release on this base)
+## [Unreleased] — final recipe state, 2026-09-23 (no image was built from this)
 
-The last Pi Desktop image built from this fork. The line continues as Pi-Desktop 3.0 on the Armbian
-build framework (Ubuntu 26.04, GNOME 50, Armbian's drop of the Rockchip vendor kernel).
+Pi Desktop on this base was retired at v2.0.2 before these fixes were baked. They are here for anyone who
+builds the recipe. The desktop line continues as Pi-Desktop 3.0 on the Armbian build framework (Ubuntu 26.04,
+GNOME 50, Armbian's drop of the Rockchip vendor kernel).
 
 ### Fixed
 - **Chrome + Chromium hardware video decode** — hook 63: default Chrome launcher stays flicker-free (`--disable-gpu-compositing`,
@@ -45,7 +46,7 @@ build framework (Ubuntu 26.04, GNOME 50, Armbian's drop of the Rockchip vendor k
 - Video driver v2.1.5 (hook 63); libxpresent1/libxss1 pinned; mpv 0.38 libraries kept through autoremove.
 
 ### Changed
-- `PRETTY_NAME` / `/etc/pi-desktop-release` → 2.0.3.
+- `PRETTY_NAME` / `/etc/pi-desktop-release` → 2.0.3 (a build from this commit identifies as 2.0.3; no such image was published).
 
 ## [1.0.1] — 2026-06-01
 
