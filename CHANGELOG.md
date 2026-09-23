@@ -20,11 +20,12 @@ Upstream changes from [Joshua-Riek/ubuntu-rockchip](https://github.com/Joshua-Ri
 
 ---
 
-## [Unreleased] — final recipe state, 2026-09-23 (no image was built from this)
+## [Unreleased] — desktop fixes after 2.0.2 (recipe only; Pi Desktop retired here 2026-09-23)
 
-Pi Desktop on this base was retired at v2.0.2 before these fixes were baked. They are here for anyone who
-builds the recipe. The desktop line continues as Pi-Desktop 3.0 on the Armbian build framework (Ubuntu 26.04,
-GNOME 50, Armbian's drop of the Rockchip vendor kernel).
+Pi Desktop on this base was retired at v2.0.2 before these fixes were baked; they stay in the recipe for anyone
+who builds the desktop flavour. The desktop line continues as Pi-Desktop 3.0 on the Armbian build framework
+(Ubuntu 26.04, GNOME 50, Armbian's drop of the Rockchip vendor kernel). The fork itself remains active as the
+Pi Studio build base.
 
 ### Fixed
 - **Chrome + Chromium hardware video decode** — hook 63: default Chrome launcher stays flicker-free (`--disable-gpu-compositing`,
