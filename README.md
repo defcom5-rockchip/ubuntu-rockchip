@@ -7,7 +7,7 @@
 > <https://github.com/defcom5-rockchip/pi-desktop-recipe> (the complete build recipe). This repository stays up as
 > the record of the 1.x–2.0.x line and of Pi Studio's first releases; it is no longer updated.
 
-A personal fork of [Joshua-Riek/ubuntu-rockchip](https://github.com/Joshua-Riek/ubuntu-rockchip), continuing this image-builder project for Orange Pi 5B after the original was archived.
+A personal fork of [Joshua-Riek/ubuntu-rockchip](https://github.com/Joshua-Riek/ubuntu-rockchip), which carried this image-builder project for the Orange Pi 5B after the original was archived. It still holds the Pi Studio line; the desktop line has moved on, as the notice above explains.
 
 > **Scope:** Orange Pi 5B only — the only hardware I own and test on.
 > **Support:** Best-effort. No release schedule, no SLA, no guarantees. Use at your own risk.
